@@ -1,0 +1,9 @@
+﻿## Interface: 16001
+## Title: Quest Mob Tracker
+## Notes: Tracks kills, drops, XP, gold and time for the quests in your log. Uses Questie's database if installed.
+## Author: Jayrox
+## Version: 0.4.0
+## OptionalDeps: Questie
+## SavedVariables: QuestMobTrackerDB
+
+QuestMobTracker.lua

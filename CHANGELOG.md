@@ -1,0 +1,18 @@
+# Changelog
+
+Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
+
+## 0.4.0 - initial repository import
+
+- Reads the quest log and tracks quests with kill or item objectives.
+- Matches mobs to quests: kill objectives directly, item objectives by learning drops, plus the optional Questie database (mobs and world objects).
+- Auto-focuses the quest for the mob you target or kill; `/qmt focus` to lock one.
+- Counts kills from target death and the XP message, since this client sends no combat log events.
+- Credits loot to the last mob killed or looted, or to a world object read from the tooltip.
+- Active timer (first kill onwards, pauses after 60s idle) and idle timer; both freeze when the objectives are complete.
+- Stat tiles, latest drop/kill card, per-source table, `/qmt scale` and `/qmt alpha`.
+
+### Known issues
+
+- Sessions that predate the active/idle timers carry their old running time as active time.
+- Loot can be credited to the wrong mob if looted more than 90 seconds after the kill or out of order.
