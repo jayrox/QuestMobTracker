@@ -14,7 +14,8 @@ SS = 4  # supersampling per axis
 
 BG = (14, 17, 23)
 AMBER = (255, 184, 64)
-PALE = (255, 236, 190)
+GOLD = (255, 209, 46)
+GOLD_DARK = (120, 78, 8)
 
 
 def inside_round_rect(x, y, r, inset=0.0):
@@ -43,12 +44,24 @@ def sample(x, y):
         abs(dy) <= 1.6 and (9 <= abs(dx) <= 14 or 24 <= abs(dx) <= 29)
     ):
         color = AMBER
-    # exclamation mark
-    if abs(dx) <= 2.6 and -11 <= dy <= 3.5:
-        color = PALE
-    if math.hypot(dx, dy - 9) <= 3.2:
-        color = PALE
+    # quest-style exclamation mark: tapered, round-topped bar plus a round dot,
+    # gold with a darker outline (like the in-game quest "!")
+    if in_bang(dx, dy, 1.1):
+        color = GOLD_DARK
+    if in_bang(dx, dy, 0.0):
+        color = GOLD
     return color + (255,)
+
+
+def in_bang(dx, dy, g):
+    top, bottom, r_top, r_bot = -8.4, 3.0, 4.0, 1.5
+    if math.hypot(dx, dy - top) <= r_top + g:
+        return True
+    if top <= dy <= bottom + g:
+        t = min(max((dy - top) / (bottom - top), 0.0), 1.0)
+        if abs(dx) <= r_top + (r_bot - r_top) * t + g:
+            return True
+    return math.hypot(dx, dy - 9.5) <= 3.1 + g
 
 
 def render():
