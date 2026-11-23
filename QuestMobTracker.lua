@@ -175,7 +175,7 @@ local function ScanQuests()
         for _, o in ipairs(q.objs) do
             if o.type == "monster" or o.type == "item" then
                 local name = ParseObjective(o.text, o.type)
-                if name then objs[#objs + 1] = { type = o.type, name = name } end
+                if name then objs[#objs + 1] = { type = o.type, name = name, text = o.text } end
             end
         end
         if #objs > 0 then
@@ -240,7 +240,8 @@ end
 ---------------------------------------------------------------------------
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local ACCENT = { 1.0, 0.72, 0.25 }
-local W, PAD, MAX_MOBS = 372, 12, 8
+local W, PAD, MAX_MOBS, MAX_OBJ = 372, 12, 8, 5
+local OBJ_H = 14
 local ROW_H = 18
 local picked  -- session currently displayed
 
@@ -357,6 +358,14 @@ local function BuildUI()
     ui.cardTitle = Text(ui.card, "GameFontHighlight"); ui.cardTitle:SetPoint("TOPLEFT", 14, -9)
     ui.cardSub = Text(ui.card, "GameFontNormalSmall"); ui.cardSub:SetPoint("TOPLEFT", 14, -26)
     ui.cardSub:SetTextColor(0.62, 0.64, 0.7)
+
+    -- objective list (between the card and the table; positioned in Refresh)
+    ui.objFS = {}
+    for i = 1, MAX_OBJ do
+        local fs = Text(ui, "GameFontHighlightSmall")
+        fs:SetWidth(W - PAD * 2 - 4)
+        ui.objFS[i] = fs
+    end
 
     -- mob table (columns are offsets from the left of the row)
     local colX = { kills = 130, drops = 172, xp = 214, gold = 262 }
@@ -596,8 +605,30 @@ Refresh = function()
     end
     if not s then for i = 1, MAX_MOBS do ui.rows[i]:Hide() end end
 
+    -- objective list under the card
+    local nObj = s and math.min(#s.objectives, MAX_OBJ) or 0
+    for i = 1, MAX_OBJ do
+        local fs = ui.objFS[i]
+        local o = i <= nObj and s.objectives[i]
+        if o then
+            local text = o.text or o.name
+            local have, need = text:match("(%d+)/(%d+)")
+            local done = have and tonumber(have) >= tonumber(need)
+            fs:SetText((done and "|cff66ff66" or "|cffdddddd") .. text .. "|r")
+            fs:ClearAllPoints(); fs:SetPoint("TOPLEFT", PAD + 2, -156 - (i - 1) * OBJ_H)
+            fs:Show()
+        else
+            fs:Hide()
+        end
+    end
+    local top = -158 - (nObj > 0 and nObj * OBJ_H + 6 or 0)
+    ui.headRow:ClearAllPoints(); ui.headRow:SetPoint("TOPLEFT", PAD, top)
+    for i = 1, MAX_MOBS do
+        ui.rows[i]:ClearAllPoints(); ui.rows[i]:SetPoint("TOPLEFT", PAD, top - ROW_H * i)
+    end
+
     -- layout below the table
-    local y = -158 - ROW_H * (rowsShown + 1) - 4
+    local y = top - ROW_H * (rowsShown + 1) - 4
     ui.more:ClearAllPoints(); ui.more:SetPoint("TOPLEFT", PAD, y)
     if ui.more:GetText() and ui.more:GetText() ~= "" then y = y - 16 end
     ui.foot:ClearAllPoints(); ui.foot:SetPoint("TOPLEFT", PAD, y - 6)

@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.4
+
+- Objective list (up to 5 kill/item objectives, green when complete) under the latest card.
+
 ## 0.4.3
 
 - Follows the quest focused in the game's tracker; stays on it until another quest sees a kill or loot.
