@@ -315,6 +315,50 @@ local function Ago(t)
     return math.floor(d / 3600) .. "h ago"
 end
 
+-- coin text with the gold/silver/copper icons, like the game's own item tooltips
+local function CoinText(c)
+    c = math.floor((c or 0) + 0.5)
+    -- Auctionator's padded format (62 [s] 02 [c]) when it's installed, so the numbers line up with its tooltips
+    if Auctionator and Auctionator.Utilities and Auctionator.Utilities.CreatePaddedMoneyString then
+        local ok, t = pcall(Auctionator.Utilities.CreatePaddedMoneyString, c)
+        if ok and t then return t end
+    end
+    if GetCoinTextureString then
+        local ok, t = pcall(GetCoinTextureString, c)
+        if ok and t then return t end
+    end
+    return ShortMoney(c)
+end
+
+-- Per-item worth in copper: vendor sell price (game) and auction price (Auctionator, if installed).
+local function ItemWorth(link, name)
+    local vendor, ah
+    local ref = link or name
+    if ref then
+        local ok, sell = pcall(function() return select(11, GetItemInfo(ref)) end)
+        if ok and type(sell) == "number" then vendor = sell end
+    end
+    local API = Auctionator and Auctionator.API and Auctionator.API.v1
+    if API and link then
+        if API.GetAuctionPriceByItemLink then
+            local ok, p = pcall(API.GetAuctionPriceByItemLink, "QuestMobTracker", link)
+            if ok and type(p) == "number" and p > 0 then ah = p end
+        end
+    end
+    return vendor, ah
+end
+
+-- totals over a loot table { [name] = {count=, link=} }: vendor value, and AH value (vendor where no AH data)
+local function LootWorth(loot, vendorTotal, ahTotal, haveAH)
+    for name, e in pairs(loot or {}) do
+        local v, a = ItemWorth(e.link, name)
+        vendorTotal = vendorTotal + (v or 0) * e.count
+        if a then haveAH = true end
+        ahTotal = ahTotal + (a or v or 0) * e.count
+    end
+    return vendorTotal, ahTotal, haveAH
+end
+
 local function Panel(parent, w, h, alpha)
     local f = CreateFrame("Frame", nil, parent, BackdropTemplateMixin and "BackdropTemplate" or nil)
     f:SetSize(w, h)
@@ -427,14 +471,20 @@ local function BuildUI()
         if not s then return end
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:AddLine("Quest gold", 1, 0.82, 0)
-        GameTooltip:AddDoubleLine("From mobs", ShortMoney(self.qmtCopper or 0), 1, 1, 1, 1, 1, 1)
+        GameTooltip:AddDoubleLine("From mobs", CoinText(self.qmtCopper or 0), 1, 1, 1, 1, 1, 1)
+        local vt, at, haveAH = 0, 0, false
+        for _, m in pairs(s.mobs) do vt, at, haveAH = LootWorth(m.loot, vt, at, haveAH) end
+        if vt > 0 or at > 0 then
+            GameTooltip:AddDoubleLine("Vendor", CoinText(vt), 1, 0.82, 0, 1, 1, 1)
+            if haveAH then GameTooltip:AddDoubleLine("Auction", CoinText(at), 1, 0.82, 0, 1, 1, 1) end
+        end
         if s.rewardMoney then
-            GameTooltip:AddDoubleLine("Quest reward", ShortMoney(s.rewardMoney), 1, 1, 1, 1, 1, 1)
-            GameTooltip:AddDoubleLine("Total so far + reward", ShortMoney((self.qmtCopper or 0) + s.rewardMoney), 1, 0.82, 0, 1, 0.82, 0)
+            GameTooltip:AddDoubleLine("Quest reward", CoinText(s.rewardMoney), 1, 1, 1, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Total so far + reward", CoinText((self.qmtCopper or 0) + s.rewardMoney), 1, 0.82, 0, 1, 0.82, 0)
         else
             GameTooltip:AddLine("Quest reward gold not available", 0.6, 0.6, 0.6)
         end
-        GameTooltip:AddDoubleLine("Per hour", ShortMoney(self.qmtPerHr or 0), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+        GameTooltip:AddDoubleLine("Per hour", CoinText(self.qmtPerHr or 0), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
     ui.tiles[4]:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -504,8 +554,26 @@ local function BuildUI()
             else
                 GameTooltip:AddLine(" ")
                 GameTooltip:AddLine("Items dropped", 0.62, 0.64, 0.7)
+                -- laid out like Auctionator's own item tooltip: link, then Vendor / Auction lines
+                local hasAuctionator = Auctionator and Auctionator.API and Auctionator.API.v1
                 for _, it in ipairs(list) do
-                    GameTooltip:AddDoubleLine(it.e.link or it.name, "x" .. it.e.count, 1, 1, 1, 0.8, 0.8, 0.8)
+                    local v, a = ItemWorth(it.e.link, it.name)
+                    local n = it.e.count
+                    local suffix = n > 1 and (" |cffffffff(x" .. n .. ")|r") or ""
+                    GameTooltip:AddLine(it.e.link or it.name)
+                    if v and v > 0 then
+                        GameTooltip:AddDoubleLine("Vendor" .. suffix, "|cffffffff" .. CoinText(v * n) .. "|r")
+                    end
+                    if hasAuctionator then
+                        GameTooltip:AddDoubleLine("Auction" .. suffix,
+                            "|cffffffff" .. (a and CoinText(a * n) or "Unknown  ") .. "|r")
+                    end
+                end
+                local vt, at, haveAH = LootWorth(m.loot, 0, 0, false)
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddDoubleLine("Total vendor", "|cffffffff" .. CoinText(vt) .. "|r")
+                if haveAH then
+                    GameTooltip:AddDoubleLine("Total auction", "|cffffffff" .. CoinText(at) .. "|r")
                 end
             end
             GameTooltip:Show()

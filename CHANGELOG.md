@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.8
+
+- Item values from Auctionator (optional dependency) and the game's vendor price in the source tooltips and the Gold tile tooltip.
+- Source tooltips laid out like Auctionator's own: item link, then Vendor / Auction lines with coin icons, plus totals.
+
 ## 0.4.7
 
 - Level progress bar along the bottom: current XP (blue), reward XP of completed quests (green), remaining (blank), with a tooltip.
