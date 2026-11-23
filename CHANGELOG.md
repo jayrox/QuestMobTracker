@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.7
+
+- Level progress bar along the bottom: current XP (blue), reward XP of completed quests (green), remaining (blank), with a tooltip.
+- Removed the Auto / Next quest / Reset quest buttons; use `/qmt focus` and `/qmt reset`.
+- Source row tooltips list every item each source has dropped, not just quest items.
+
 ## 0.4.6
 
 - Source list shows 5 rows and scrolls with the mouse wheel.

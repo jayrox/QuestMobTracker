@@ -72,6 +72,15 @@ local function Mob(s, name)
     return m
 end
 
+-- remembers every item a source dropped (for the row tooltip)
+local function AddLoot(m, itemName, link, count)
+    m.loot = m.loot or {}
+    local e = m.loot[itemName]
+    if not e then e = { count = 0 }; m.loot[itemName] = e end
+    e.count = e.count + count
+    e.link = link
+end
+
 local function ActiveSessions()
     local t = {}
     for _, s in pairs(db.quests) do
@@ -201,9 +210,17 @@ local function QuestRewardMoney(questId)
     return v
 end
 
+local pendingXP = 0   -- reward XP of every completed quest in the log (not yet turned in)
+
 local function ScanQuests()
     local seen = {}
-    for _, q in ipairs(ReadQuestLog()) do
+    local pend = 0
+    local log = ReadQuestLog()
+    for _, q in ipairs(log) do
+        if q.complete then pend = pend + (QuestRewardXP(q.questId) or 0) end
+    end
+    pendingXP = pend
+    for _, q in ipairs(log) do
         local title = q.title
         local objs = {}
         for _, o in ipairs(q.objs) do
@@ -465,6 +482,35 @@ local function BuildUI()
     ui.rows = {}
     for i = 1, MAX_MOBS do
         local r = CreateFrame("Frame", nil, ui)
+        r:EnableMouse(true)
+        r:SetScript("OnEnter", function(self)
+            local s, name = picked, self.srcName
+            if not s or not name then return end
+            local m = s.mobs[name]
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(name, 1, 0.82, 0)
+            if m then
+                GameTooltip:AddDoubleLine("Kills", tostring(m.kills), 0.7, 0.7, 0.7, 1, 1, 1)
+                GameTooltip:AddDoubleLine("Drops", tostring(m.drops), 0.7, 0.7, 0.7, 1, 1, 1)
+            end
+            local list = {}
+            for itemName, e in pairs(m and m.loot or {}) do list[#list + 1] = { name = itemName, e = e } end
+            table.sort(list, function(a, b)
+                if a.e.count ~= b.e.count then return a.e.count > b.e.count end
+                return a.name < b.name
+            end)
+            if #list == 0 then
+                GameTooltip:AddLine("No items recorded yet", 0.6, 0.6, 0.6)
+            else
+                GameTooltip:AddLine(" ")
+                GameTooltip:AddLine("Items dropped", 0.62, 0.64, 0.7)
+                for _, it in ipairs(list) do
+                    GameTooltip:AddDoubleLine(it.e.link or it.name, "x" .. it.e.count, 1, 1, 1, 0.8, 0.8, 0.8)
+                end
+            end
+            GameTooltip:Show()
+        end)
+        r:SetScript("OnLeave", function() GameTooltip:Hide() end)
         r:SetSize(W - PAD * 2, ROW_H)
         r:SetPoint("TOPLEFT", PAD, -158 - ROW_H * i)
         Cols(r, false)
@@ -480,24 +526,32 @@ local function BuildUI()
     -- footer
     ui.foot = Text(ui, "GameFontNormalSmall")
     ui.foot:SetTextColor(0.5, 0.52, 0.58)
-    ui.btnAuto = FlatButton(ui, "Auto", 70, function() db.focus, db.focusSoft, db.focusAt = nil, nil, nil; Refresh() end)
-    ui.btnNext = FlatButton(ui, "Next quest", 90, function()
-        local list = ActiveSessions()
-        table.sort(list, function(a, b) return a.title < b.title end)
-        if #list == 0 then return end
-        local idx = 0
-        for i, s in ipairs(list) do if s == picked then idx = i end end
-        db.focus = list[(idx % #list) + 1].title
-        db.focusSoft, db.focusAt = true, GetTime()   -- just a peek: expires after 20s or when another quest gets activity
-        Refresh()
+
+    -- level progress bar: [current xp | xp from completed quests | remaining]
+    local bw = W - PAD * 2
+    ui.xpBar = CreateFrame("Frame", nil, ui)
+    ui.xpBar:SetSize(bw, 6)
+    ui.xpBar:EnableMouse(true)
+    ui.xpBar.bg = ui.xpBar:CreateTexture(nil, "BACKGROUND")
+    ui.xpBar.bg:SetAllPoints(); ui.xpBar.bg:SetColorTexture(1, 1, 1, 0.08)
+    ui.xpBar.cur = ui.xpBar:CreateTexture(nil, "ARTWORK")
+    ui.xpBar.cur:SetColorTexture(0.25, 0.55, 1, 0.95)
+    ui.xpBar.cur:SetPoint("TOPLEFT"); ui.xpBar.cur:SetPoint("BOTTOMLEFT")
+    ui.xpBar.pend = ui.xpBar:CreateTexture(nil, "ARTWORK")
+    ui.xpBar.pend:SetColorTexture(0.3, 0.85, 0.4, 0.95)
+    ui.xpBar.pend:SetPoint("TOPLEFT", ui.xpBar.cur, "TOPRIGHT"); ui.xpBar.pend:SetPoint("BOTTOMLEFT", ui.xpBar.cur, "BOTTOMRIGHT")
+    ui.xpBar:SetScript("OnEnter", function(self)
+        local xp, mx = UnitXP("player"), UnitXPMax("player")
+        if not mx or mx <= 0 then return end
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:AddLine("Level " .. (UnitLevel("player") or "?") .. " progress", 1, 0.82, 0)
+        GameTooltip:AddDoubleLine("Current", string.format("%d / %d (%.0f%%)", xp, mx, xp / mx * 100), 0.4, 0.7, 1, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Completed quests", string.format("+%d (%.0f%%)", pendingXP, pendingXP / mx * 100), 0.4, 0.9, 0.5, 1, 1, 1)
+        GameTooltip:AddDoubleLine("After turn-ins", string.format("%d / %d", xp + pendingXP, mx), 0.7, 0.7, 0.7, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Remaining", tostring(math.max(0, mx - xp - pendingXP)), 0.7, 0.7, 0.7, 1, 1, 1)
+        GameTooltip:Show()
     end)
-    ui.btnReset = FlatButton(ui, "Reset quest", 90, function()
-        if picked then
-            db.quests[picked.title] = nil
-            ScanQuests()
-            Refresh()
-        end
-    end)
+    ui.xpBar:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     if db.pos then
         ui:ClearAllPoints()
@@ -671,6 +725,7 @@ Refresh = function()
         scrollOffset = math.max(0, math.min(scrollOffset, #names - MAX_MOBS))
         for i = 1, MAX_MOBS do
             local r, name = ui.rows[i], names[i + scrollOffset]
+            r.srcName = name
             if name then
                 local m = s.mobs[name] or { kills = 0, drops = 0, items = 0, xp = 0, copper = 0 }
                 local isObj = (s.isObject and s.isObject[name]) or (s.knownObjs and s.knownObjs[name] and not (s.known and s.known[name]))
@@ -687,7 +742,7 @@ Refresh = function()
                 r:Hide()
             end
         end
-        ui.foot:SetText(string.format("%d source(s) known%s", #names, (db.focus and not db.focusSoft) and "  ·  locked" or ""))
+        ui.foot:SetText(string.format("%d source(s) known%s", #names, (db.focus and not db.focusSoft) and "  ·  locked (/qmt focus to unlock)" or ""))
         if #names > MAX_MOBS then
             ui.more:SetText(string.format("%d-%d of %d  ·  scroll for more",
                 scrollOffset + 1, scrollOffset + MAX_MOBS, #names))
@@ -728,11 +783,23 @@ Refresh = function()
     ui.more:ClearAllPoints(); ui.more:SetPoint("TOPLEFT", PAD, y)
     if ui.more:GetText() and ui.more:GetText() ~= "" then y = y - 16 end
     ui.foot:ClearAllPoints(); ui.foot:SetPoint("TOPLEFT", PAD, y - 6)
-    y = y - 26
-    ui.btnAuto:ClearAllPoints();  ui.btnAuto:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -PAD - 90 * 2 - 8, y)
-    ui.btnNext:ClearAllPoints();  ui.btnNext:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -PAD - 90 - 4, y)
-    ui.btnReset:ClearAllPoints(); ui.btnReset:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -PAD, y)
-    ui:SetHeight(-y + 22 + PAD)
+    y = y - 6 - 14   -- bottom of the footer line
+    local height = -y + PAD
+    local xp, mx = UnitXP("player"), UnitXPMax("player")
+    if xp and mx and mx > 0 then
+        local bw = W - PAD * 2
+        local curW = bw * math.min(1, xp / mx)
+        local pendW = math.min(bw - curW, bw * pendingXP / mx)
+        ui.xpBar.cur:SetWidth(math.max(0.001, curW))
+        ui.xpBar.pend:SetWidth(math.max(0.001, pendW))
+        ui.xpBar.pend:SetShown(pendW > 0.5)
+        ui.xpBar:ClearAllPoints(); ui.xpBar:SetPoint("TOPLEFT", ui, "TOPLEFT", PAD, y - 2)
+        ui.xpBar:Show()
+        height = height + 2 + 6
+    else
+        ui.xpBar:Hide()   -- max level
+    end
+    ui:SetHeight(height)
 end
 
 ---------------------------------------------------------------------------
@@ -887,6 +954,7 @@ local function OnChatLoot(msg)
             end
             src = src or (lastSource and GetTime() - lastSource.at < 90 and lastSource.name) or "Unknown source"
             for _, s in ipairs(ActiveSessions()) do
+                local matched = false
                 for _, o in ipairs(s.objectives) do
                     if o.type == "item" and o.name == itemName then
                         local src, isObj = src, isObj
@@ -912,8 +980,14 @@ local function OnChatLoot(msg)
                         else
                             m.drops = m.drops + 1
                         end
+                        AddLoot(m, itemName, link, count)
+                        matched = true
                         break
                     end
+                end
+                -- any other item from one of this quest's mobs goes in the tooltip list too
+                if not matched and (s.members[src] or (s.known and s.known[src]) or (s.knownObjs and s.knownObjs[src])) then
+                    AddLoot(Mob(s, src), itemName, link, count)
                 end
             end
             return
