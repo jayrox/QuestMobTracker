@@ -167,6 +167,40 @@ local function ReadQuestLog()
     return out
 end
 
+-- XP the quest itself pays on turn-in. Tries the game's API, then Questie's XP module.
+local function QuestRewardXP(questId)
+    if not questId then return nil end
+    local function try(f, ...)
+        local ok, v = pcall(f, ...)
+        if ok and type(v) == "number" and v > 0 then return v end
+    end
+    local v
+    if GetQuestLogRewardXP then v = try(GetQuestLogRewardXP, questId) end
+    if not v and C_QuestLog and C_QuestLog.GetQuestLogRewardXP then v = try(C_QuestLog.GetQuestLogRewardXP, questId) end
+    if not v and QuestieLoader then
+        local ok, QXP = pcall(function() return QuestieLoader:ImportModule("QuestXP") end)
+        if ok and QXP and QXP.GetQuestLogRewardXP then v = try(QXP.GetQuestLogRewardXP, questId) end
+    end
+    return v
+end
+
+-- Copper the quest pays on turn-in (game API, then Questie's DB).
+local function QuestRewardMoney(questId)
+    if not questId then return nil end
+    local function try(f, ...)
+        local ok, v = pcall(f, ...)
+        if ok and type(v) == "number" and v > 0 then return v end
+    end
+    local v
+    if GetQuestLogRewardMoney then v = try(GetQuestLogRewardMoney, questId) end
+    if not v and C_QuestLog and C_QuestLog.GetQuestLogRewardMoney then v = try(C_QuestLog.GetQuestLogRewardMoney, questId) end
+    if not v and QuestieLoader then
+        local ok, DB = pcall(function() return QuestieLoader:ImportModule("QuestieDB") end)
+        if ok and DB and DB.QueryQuestSingle then v = try(DB.QueryQuestSingle, questId, "rewardMoney") end
+    end
+    return v
+end
+
 local function ScanQuests()
     local seen = {}
     for _, q in ipairs(ReadQuestLog()) do
@@ -192,6 +226,8 @@ local function ScanQuests()
             end
             s.objectives = objs
             s.questId = q.questId
+            s.rewardXP = QuestRewardXP(q.questId) or s.rewardXP
+            s.rewardMoney = QuestRewardMoney(q.questId) or s.rewardMoney
             s.isObject = s.isObject or {}
             if s.started == nil and s.elapsed > 5 then s.started = true end
             if not s.known and not s.knownObjs then
@@ -256,7 +292,7 @@ end
 local function Ago(t)
     if not t then return "" end
     local d = time() - t
-    if d < 60 then return "just now" end
+    if d < 60 then return "" end   -- "just now" is implied
     if d < 3600 then return math.floor(d / 60) .. "m ago" end
     return math.floor(d / 3600) .. "h ago"
 end
@@ -348,6 +384,42 @@ local function BuildUI()
         t.sub:SetTextColor(0.5, 0.52, 0.58)
         ui.tiles[i] = t
     end
+    -- XP tile tooltip: mobs + quest reward = total
+    ui.tiles[3]:EnableMouse(true)
+    ui.tiles[3]:SetScript("OnEnter", function(self)
+        local s = picked
+        if not s then return end
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("Quest XP", 1, 0.82, 0)
+        GameTooltip:AddDoubleLine("From mobs", tostring(self.qmtXP or 0), 1, 1, 1, 1, 1, 1)
+        if s.rewardXP then
+            GameTooltip:AddDoubleLine("Quest reward", tostring(s.rewardXP), 1, 1, 1, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Total so far + reward", tostring((self.qmtXP or 0) + s.rewardXP), 1, 0.82, 0, 1, 0.82, 0)
+        else
+            GameTooltip:AddLine("Quest reward XP not available", 0.6, 0.6, 0.6)
+        end
+        GameTooltip:AddDoubleLine("Per hour", string.format("%d", self.qmtPerHr or 0), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    ui.tiles[3]:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- Gold tile tooltip: mob gold + quest reward
+    ui.tiles[4]:EnableMouse(true)
+    ui.tiles[4]:SetScript("OnEnter", function(self)
+        local s = picked
+        if not s then return end
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("Quest gold", 1, 0.82, 0)
+        GameTooltip:AddDoubleLine("From mobs", ShortMoney(self.qmtCopper or 0), 1, 1, 1, 1, 1, 1)
+        if s.rewardMoney then
+            GameTooltip:AddDoubleLine("Quest reward", ShortMoney(s.rewardMoney), 1, 1, 1, 1, 1, 1)
+            GameTooltip:AddDoubleLine("Total so far + reward", ShortMoney((self.qmtCopper or 0) + s.rewardMoney), 1, 0.82, 0, 1, 0.82, 0)
+        else
+            GameTooltip:AddLine("Quest reward gold not available", 0.6, 0.6, 0.6)
+        end
+        GameTooltip:AddDoubleLine("Per hour", ShortMoney(self.qmtPerHr or 0), 0.7, 0.7, 0.7, 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    ui.tiles[4]:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- latest find card
     ui.card = Panel(ui, W - PAD * 2, 46, 0.08)
@@ -359,11 +431,11 @@ local function BuildUI()
     ui.cardSub = Text(ui.card, "GameFontNormalSmall"); ui.cardSub:SetPoint("TOPLEFT", 14, -26)
     ui.cardSub:SetTextColor(0.62, 0.64, 0.7)
 
-    -- objective list (between the card and the table; positioned in Refresh)
+    -- objective list (inside the card, above the latest line; positioned in Refresh)
     ui.objFS = {}
     for i = 1, MAX_OBJ do
-        local fs = Text(ui, "GameFontHighlightSmall")
-        fs:SetWidth(W - PAD * 2 - 4)
+        local fs = Text(ui.card, "GameFontHighlightSmall")
+        fs:SetWidth(W - PAD * 2 - 24)
         ui.objFS[i] = fs
     end
 
@@ -564,15 +636,21 @@ Refresh = function()
         T[1].value:SetText(kills);  T[1].sub:SetText(string.format("%d / hr", kills / hours))
         T[2].value:SetText(hasItem and items or drops)
         T[2].sub:SetText(hasItem and (kills > 0 and string.format("%.0f%% rate", drops / kills * 100) or "items") or "drops")
-        T[3].value:SetText(xp);     T[3].sub:SetText(string.format("%d / hr", xp / hours))
-        T[4].value:SetText(ShortMoney(copper)); T[4].sub:SetText(ShortMoney(copper / hours) .. " /hr")
+        T[3].value:SetText(xp)
+        T[3].sub:SetText(string.format("%d / hr", xp / hours))
+        T[3].qmtXP, T[3].qmtPerHr = xp, xp / hours
+        T[4].value:SetText(ShortMoney(copper))
+        T[4].sub:SetText(ShortMoney(copper / hours) .. " /hr")
+        T[4].qmtCopper, T[4].qmtPerHr = copper, copper / hours
 
         if hasItem and s.latest then
             ui.cardTitle:SetText(string.format("%s |cffaaaaaax%d|r", s.latest.item, s.latest.count))
-            ui.cardSub:SetText(string.format("Latest drop · %s · %s", s.latest.mob, Ago(s.latest.at)))
+            local ago = Ago(s.latest.at)
+            ui.cardSub:SetText("Latest drop · " .. s.latest.mob .. (ago ~= "" and (" · " .. ago) or ""))
         elseif not hasItem and s.latestKill then
             ui.cardTitle:SetText(s.latestKill.name)
-            ui.cardSub:SetText("Latest kill · " .. Ago(s.latestKill.at))
+            local ago = Ago(s.latestKill.at)
+            ui.cardSub:SetText("Latest kill" .. (ago ~= "" and (" · " .. ago) or ""))
         else
             ui.cardTitle:SetText(hasItem and "No drops yet" or "No kills yet")
             ui.cardSub:SetText(#names > 0 and "Kill a listed mob below" or "Waiting for a matching mob")
@@ -615,13 +693,17 @@ Refresh = function()
             local have, need = text:match("(%d+)/(%d+)")
             local done = have and tonumber(have) >= tonumber(need)
             fs:SetText((done and "|cff66ff66" or "|cffdddddd") .. text .. "|r")
-            fs:ClearAllPoints(); fs:SetPoint("TOPLEFT", PAD + 2, -156 - (i - 1) * OBJ_H)
+            fs:ClearAllPoints(); fs:SetPoint("TOPLEFT", ui.card, "TOPLEFT", 14, -9 - (i - 1) * OBJ_H)
             fs:Show()
         else
             fs:Hide()
         end
     end
-    local top = -158 - (nObj > 0 and nObj * OBJ_H + 6 or 0)
+    local objBlock = nObj > 0 and (nObj * OBJ_H + 6) or 0
+    ui.card:SetHeight(46 + objBlock)
+    ui.cardTitle:ClearAllPoints(); ui.cardTitle:SetPoint("TOPLEFT", 14, -9 - objBlock)
+    ui.cardSub:ClearAllPoints();   ui.cardSub:SetPoint("TOPLEFT", 14, -26 - objBlock)
+    local top = -158 - objBlock
     ui.headRow:ClearAllPoints(); ui.headRow:SetPoint("TOPLEFT", PAD, top)
     for i = 1, MAX_MOBS do
         ui.rows[i]:ClearAllPoints(); ui.rows[i]:SetPoint("TOPLEFT", PAD, top - ROW_H * i)

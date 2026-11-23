@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.5
+
+- Objective list moved inside the latest-drop card.
+- Dropped the "just now" age from the latest drop/kill line.
+- XP and Gold tiles have a tooltip with mob earnings, quest reward and total (reward read from the game API or Questie when available).
+
 ## 0.4.4
 
 - Objective list (up to 5 kill/item objectives, green when complete) under the latest card.
