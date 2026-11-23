@@ -75,8 +75,8 @@ end
 
 -- Every quest in the log tracks its own mobs and items, whichever quest is focused in the window:
 -- a kill or pickup updates every quest it belongs to. Only mobs related to a quest are counted
--- for it. Without Questie data an item-objective quest can't know its mobs up front, so
--- unmatched mobs are held in memory only (never saved) and claimed once the mob drops the item.
+-- for it. A mob we can't tie to a quest (no Questie entry, not named by an objective) is held in
+-- memory only (never saved) and claimed once it drops the quest item.
 local pending = {}   -- quest title -> mob name -> stats
 
 local function Related(s, name)
@@ -86,8 +86,8 @@ end
 -- stats table to add to for this mob: saved if related, otherwise the in-memory holding area
 local function Stat(s, name)
     if Related(s, name) then return Mob(s, name) end
-    -- with Questie we know the quest's full mob list up front: anything else is just not ours
-    if s.known or s.knownObjs then return {} end
+    -- not (yet) known to belong to this quest: hold it in memory. Questie's list can be incomplete,
+    -- so a mob that later drops the quest item still gets its earlier kills and XP.
     local p = pending[s.title]
     if not p then p = {}; pending[s.title] = p end
     local m = p[name]

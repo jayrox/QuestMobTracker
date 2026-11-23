@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.10
+
+- Fixed 0.4.9: kills and XP stopped counting for mobs that Questie doesn't list for a quest (the handler errored). Unmatched mobs are held in memory again and claimed when they drop the quest item.
+
 ## 0.4.9
 
 - Only mobs related to a quest are counted for it: kill objectives, Questie's mob/object list, or (without Questie) a mob that drops the quest item. Unmatched mobs are held in memory only and claimed when they drop the item.
