@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.11
+
+- Gold: money looted a second or more after the loot window closed is now credited to the last corpse opened (10s window); `/qmt trace` also prints money lines.
+- Drops tile uses the quest log's item count when it is higher than what was seen dropping, with a tooltip explaining the difference.
+
 ## 0.4.10
 
 - Fixed 0.4.9: kills and XP stopped counting for mobs that Questie doesn't list for a quest (the handler errored). Unmatched mobs are held in memory again and claimed when they drop the quest item.

@@ -17,6 +17,7 @@ local ui
 local guidNames = {}
 local cleuSeen = {}   -- debug: combat log subevents seen
 local lastLoot = { token = 0 }
+local lastLootSrc   -- {name=, at=} last corpse/object whose loot window we opened (outlives lastLoot)
 local lootPatterns, xpPattern, moneyPatterns, slainSuffix
 local scanErrShown   -- only report a quest-scan error once
 
@@ -480,6 +481,21 @@ local function BuildUI()
         t.sub:SetTextColor(0.5, 0.52, 0.58)
         ui.tiles[i] = t
     end
+    -- Drops tile tooltip: what we saw drop vs what the quest log says
+    ui.tiles[2]:EnableMouse(true)
+    ui.tiles[2]:SetScript("OnEnter", function(self)
+        local s = picked
+        if not s or not self.qmtLog then return end
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:AddLine("Quest items", 1, 0.82, 0)
+        GameTooltip:AddDoubleLine("In quest log", tostring(self.qmtLog), 1, 1, 1, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Seen dropping", tostring(self.qmtTracked or 0), 1, 1, 1, 1, 1, 1)
+        if self.qmtLog > (self.qmtTracked or 0) then
+            GameTooltip:AddLine((self.qmtLog - self.qmtTracked) .. " picked up before tracking or from an unseen source", 0.6, 0.6, 0.6, true)
+        end
+        GameTooltip:Show()
+    end)
+    ui.tiles[2]:SetScript("OnLeave", function() GameTooltip:Hide() end)
     -- XP tile tooltip: mobs + quest reward = total
     ui.tiles[3]:EnableMouse(true)
     ui.tiles[3]:SetScript("OnEnter", function(self)
@@ -785,7 +801,14 @@ Refresh = function()
 
         local T = ui.tiles
         T[1].value:SetText(kills);  T[1].sub:SetText(string.format("%d / hr", kills / hours))
-        T[2].value:SetText(hasItem and items or drops)
+        -- the quest log's own count is authoritative; ours can miss items picked up before
+        -- tracking started or from a source we couldn't see
+        local logItems = 0
+        for _, o in ipairs(s.objectives) do
+            if o.type == "item" then logItems = logItems + (tonumber((o.text or ""):match("^(%d+)/")) or 0) end
+        end
+        T[2].qmtTracked, T[2].qmtLog = items, logItems
+        T[2].value:SetText(hasItem and math.max(items, logItems) or drops)
         T[2].sub:SetText(hasItem and (kills > 0 and string.format("%.0f%% rate", drops / kills * 100) or "items") or "drops")
         T[3].value:SetText(xp)
         T[3].sub:SetText(string.format("%d / hr", xp / hours))
@@ -1010,6 +1033,7 @@ local function OnLootOpened()
     name = name or UnitName("target")
         or (lastXPName and lastXPAt and GetTime() - lastXPAt < 30 and lastXPName) or nil
     lastLoot.name = name
+    if name then lastLootSrc = { name = name, at = GetTime() } end
     if name and not lastLoot.isObject then lastSource = { name = name, at = GetTime() } end
 end
 
@@ -1111,10 +1135,17 @@ local function OnChatMoney(msg)
     local c = tonumber(msg:match(moneyPatterns.copper)) or 0
     local total = g * 10000 + sv * 100 + c
     if total <= 0 then return end
+    -- The money line can arrive a second or more after the loot window closed (and lastLoot is
+    -- cleared), so fall back to the last corpse we opened.
+    local src = lastLoot.name
+    if not src and lastLootSrc and GetTime() - lastLootSrc.at < 10 then src = lastLootSrc.name end
+    if db.traceLoot then
+        print_(string.format("money trace: %d copper, source=%s (lastLoot=%s)", total, tostring(src), tostring(lastLoot.name)))
+    end
     for _, s in ipairs(ActiveSessions()) do
         s.totalCopper = s.totalCopper + total
-        if lastLoot.name then
-            local m = Stat(s, lastLoot.name)
+        if src then
+            local m = Stat(s, src)
             m.copper = m.copper + total
         end
     end
