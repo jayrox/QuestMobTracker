@@ -276,7 +276,8 @@ end
 ---------------------------------------------------------------------------
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local ACCENT = { 1.0, 0.72, 0.25 }
-local W, PAD, MAX_MOBS, MAX_OBJ = 372, 12, 8, 5
+local W, PAD, MAX_MOBS, MAX_OBJ = 372, 12, 5, 5
+local scrollOffset, scrollTitle = 0, nil   -- source list scroll position
 local OBJ_H = 14
 local ROW_H = 18
 local picked  -- session currently displayed
@@ -470,6 +471,11 @@ local function BuildUI()
         ui.rows[i] = r
     end
     ui.more = Text(ui, "GameFontNormalSmall"); ui.more:SetTextColor(0.5, 0.52, 0.58)
+    ui:EnableMouseWheel(true)
+    ui:SetScript("OnMouseWheel", function(_, delta)
+        scrollOffset = scrollOffset - delta
+        Refresh()
+    end)
 
     -- footer
     ui.foot = Text(ui, "GameFontNormalSmall")
@@ -508,8 +514,13 @@ local function QuestMobNames(s)
     if s.knownObjs then for name in pairs(s.knownObjs) do set[name] = true end end
     for name in pairs(set) do names[#names + 1] = name end
     table.sort(names, function(a, b)
-        local ka = s.mobs[a] and s.mobs[a].kills or 0
-        local kb = s.mobs[b] and s.mobs[b].kills or 0
+        -- most drops first, then most kills
+        local ma, mb = s.mobs[a] or {}, s.mobs[b] or {}
+        local ia, ib = ma.items or 0, mb.items or 0
+        if ia ~= ib then return ia > ib end
+        local da, db_ = ma.drops or 0, mb.drops or 0
+        if da ~= db_ then return da > db_ end
+        local ka, kb = ma.kills or 0, mb.kills or 0
         if ka ~= kb then return ka > kb end
         return a < b
     end)
@@ -656,8 +667,10 @@ Refresh = function()
             ui.cardSub:SetText(#names > 0 and "Kill a listed mob below" or "Waiting for a matching mob")
         end
 
+        if scrollTitle ~= s.title then scrollTitle, scrollOffset = s.title, 0 end
+        scrollOffset = math.max(0, math.min(scrollOffset, #names - MAX_MOBS))
         for i = 1, MAX_MOBS do
-            local r, name = ui.rows[i], names[i]
+            local r, name = ui.rows[i], names[i + scrollOffset]
             if name then
                 local m = s.mobs[name] or { kills = 0, drops = 0, items = 0, xp = 0, copper = 0 }
                 local isObj = (s.isObject and s.isObject[name]) or (s.knownObjs and s.knownObjs[name] and not (s.known and s.known[name]))
@@ -676,7 +689,8 @@ Refresh = function()
         end
         ui.foot:SetText(string.format("%d source(s) known%s", #names, (db.focus and not db.focusSoft) and "  ·  locked" or ""))
         if #names > MAX_MOBS then
-            ui.more:SetText(string.format("+%d more", #names - MAX_MOBS))
+            ui.more:SetText(string.format("%d-%d of %d  ·  scroll for more",
+                scrollOffset + 1, scrollOffset + MAX_MOBS, #names))
         else
             ui.more:SetText("")
         end

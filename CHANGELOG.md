@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.6
+
+- Source list shows 5 rows and scrolls with the mouse wheel.
+- Sources are sorted by items dropped, then drops, then kills.
+
 ## 0.4.5
 
 - Objective list moved inside the latest-drop card.
