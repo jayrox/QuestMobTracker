@@ -2,6 +2,14 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.9
+
+- Only mobs related to a quest are counted for it: kill objectives, Questie's mob/object list, or (without Questie) a mob that drops the quest item. Unmatched mobs are held in memory only and claimed when they drop the item.
+- Every quest in the log tracks its own mobs and items regardless of which quest is shown.
+- Fixed: a saved "Next quest" peek could become a permanent lock.
+- Quest reward lookups are cached; per-mob lookup tables are pruned.
+- Removed unused code (button helper, soft-focus logic), merged duplicate kill counting.
+
 ## 0.4.8
 
 - Item values from Auctionator (optional dependency) and the game's vendor price in the source tooltips and the Gold tile tooltip.

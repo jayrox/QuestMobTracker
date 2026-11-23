@@ -18,6 +18,7 @@ local guidNames = {}
 local cleuSeen = {}   -- debug: combat log subevents seen
 local lastLoot = { token = 0 }
 local lootPatterns, xpPattern, moneyPatterns, slainSuffix
+local scanErrShown   -- only report a quest-scan error once
 
 local function print_(msg) print("|cff33ccff[QMT]|r " .. tostring(msg)) end
 
@@ -70,6 +71,38 @@ local function Mob(s, name)
         s.mobs[name] = m
     end
     return m
+end
+
+-- Every quest in the log tracks its own mobs and items, whichever quest is focused in the window:
+-- a kill or pickup updates every quest it belongs to. Only mobs related to a quest are counted
+-- for it. Without Questie data an item-objective quest can't know its mobs up front, so
+-- unmatched mobs are held in memory only (never saved) and claimed once the mob drops the item.
+local pending = {}   -- quest title -> mob name -> stats
+
+local function Related(s, name)
+    return s.members[name] or (s.known and s.known[name]) or (s.knownObjs and s.knownObjs[name])
+end
+
+-- stats table to add to for this mob: saved if related, otherwise the in-memory holding area
+local function Stat(s, name)
+    if Related(s, name) then return Mob(s, name) end
+    -- with Questie we know the quest's full mob list up front: anything else is just not ours
+    if s.known or s.knownObjs then return {} end
+    local p = pending[s.title]
+    if not p then p = {}; pending[s.title] = p end
+    local m = p[name]
+    if not m then m = { kills = 0, xp = 0, copper = 0, drops = 0, items = 0 }; p[name] = m end
+    return m
+end
+
+-- the mob just became related: move whatever we held for it into the saved stats
+local function Adopt(s, name)
+    local p = pending[s.title]
+    local held = p and p[name]
+    if not held then return end
+    p[name] = nil
+    local m = Mob(s, name)
+    for _, k in ipairs({ "kills", "xp", "copper", "drops", "items" }) do m[k] = m[k] + held[k] end
 end
 
 -- remembers every item a source dropped (for the row tooltip)
@@ -176,39 +209,51 @@ local function ReadQuestLog()
     return out
 end
 
--- XP the quest itself pays on turn-in. Tries the game's API, then Questie's XP module.
-local function QuestRewardXP(questId)
+-- calls f(...) and returns its result only if it is a positive number
+local function Try(f, ...)
+    local ok, v = pcall(f, ...)
+    if ok and type(v) == "number" and v > 0 then return v end
+end
+
+-- Reward lookups hit the game API and Questie on every quest-log update, so cache them.
+-- Hits are kept; misses are retried after 30s (Questie may not be ready yet).
+local rewardCache = {}
+local function CachedReward(kind, questId, fetch)
     if not questId then return nil end
-    local function try(f, ...)
-        local ok, v = pcall(f, ...)
-        if ok and type(v) == "number" and v > 0 then return v end
-    end
+    local key, now = kind .. ":" .. questId, GetTime()
+    local c = rewardCache[key]
+    if c and (c.v or now - c.at < 30) then return c.v end
+    local v = fetch(questId)
+    rewardCache[key] = { v = v, at = now }
+    return v
+end
+
+-- XP the quest itself pays on turn-in. Tries the game's API, then Questie's XP module.
+local function FetchRewardXP(questId)
     local v
-    if GetQuestLogRewardXP then v = try(GetQuestLogRewardXP, questId) end
-    if not v and C_QuestLog and C_QuestLog.GetQuestLogRewardXP then v = try(C_QuestLog.GetQuestLogRewardXP, questId) end
+    if GetQuestLogRewardXP then v = Try(GetQuestLogRewardXP, questId) end
+    if not v and C_QuestLog and C_QuestLog.GetQuestLogRewardXP then v = Try(C_QuestLog.GetQuestLogRewardXP, questId) end
     if not v and QuestieLoader then
         local ok, QXP = pcall(function() return QuestieLoader:ImportModule("QuestXP") end)
-        if ok and QXP and QXP.GetQuestLogRewardXP then v = try(QXP.GetQuestLogRewardXP, questId) end
+        if ok and QXP and QXP.GetQuestLogRewardXP then v = Try(QXP.GetQuestLogRewardXP, questId) end
     end
     return v
 end
 
 -- Copper the quest pays on turn-in (game API, then Questie's DB).
-local function QuestRewardMoney(questId)
-    if not questId then return nil end
-    local function try(f, ...)
-        local ok, v = pcall(f, ...)
-        if ok and type(v) == "number" and v > 0 then return v end
-    end
+local function FetchRewardMoney(questId)
     local v
-    if GetQuestLogRewardMoney then v = try(GetQuestLogRewardMoney, questId) end
-    if not v and C_QuestLog and C_QuestLog.GetQuestLogRewardMoney then v = try(C_QuestLog.GetQuestLogRewardMoney, questId) end
+    if GetQuestLogRewardMoney then v = Try(GetQuestLogRewardMoney, questId) end
+    if not v and C_QuestLog and C_QuestLog.GetQuestLogRewardMoney then v = Try(C_QuestLog.GetQuestLogRewardMoney, questId) end
     if not v and QuestieLoader then
         local ok, DB = pcall(function() return QuestieLoader:ImportModule("QuestieDB") end)
-        if ok and DB and DB.QueryQuestSingle then v = try(DB.QueryQuestSingle, questId, "rewardMoney") end
+        if ok and DB and DB.QueryQuestSingle then v = Try(DB.QueryQuestSingle, questId, "rewardMoney") end
     end
     return v
 end
+
+local function QuestRewardXP(questId) return CachedReward("xp", questId, FetchRewardXP) end
+local function QuestRewardMoney(questId) return CachedReward("money", questId, FetchRewardMoney) end
 
 local pendingXP = 0   -- reward XP of every completed quest in the log (not yet turned in)
 
@@ -255,6 +300,10 @@ local function ScanQuests()
                 if o.type == "monster" and (not s.known or s.known[o.name]) then
                     s.members[o.name] = true
                 end
+            end
+            -- mobs that became related (objective text, or Questie data arriving late)
+            for name in pairs(pending[title] or {}) do
+                if Related(s, name) then Adopt(s, name) end
             end
             if not q.complete and s.completeAt then s.completeAt = nil end
             if q.complete and s.started and not s.completeAt then
@@ -371,21 +420,6 @@ local function Text(parent, font, justify)
     local t = parent:CreateFontString(nil, "OVERLAY", font or "GameFontNormalSmall")
     t:SetJustifyH(justify or "LEFT")
     return t
-end
-
-local function FlatButton(parent, label, w, onclick)
-    local b = CreateFrame("Button", nil, parent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    b:SetSize(w, 22)
-    b:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
-    b:SetBackdropColor(1, 1, 1, 0.06)
-    b:SetBackdropBorderColor(1, 1, 1, 0.12)
-    local t = Text(b, "GameFontHighlightSmall", "CENTER")
-    t:SetAllPoints()
-    t:SetText(label)
-    b:SetScript("OnEnter", function(self) self:SetBackdropColor(ACCENT[1], ACCENT[2], ACCENT[3], 0.25) end)
-    b:SetScript("OnLeave", function(self) self:SetBackdropColor(1, 1, 1, 0.06) end)
-    b:SetScript("OnClick", onclick)
-    return b
 end
 
 local Refresh  -- forward declaration
@@ -656,27 +690,12 @@ end
 
 -- Which quest are we "currently working on"?
 --   1. /qmt focus <name> override
---   2. the mob you have targeted belongs to a quest in your log
---   3. a quest whose mob you killed / looted in the last 5 minutes (most recent wins)
---   3. the quest you selected in the game's tracker
---   4. most recently active quest this session, else first alphabetically
+--   2. the quest focused in the game's tracker, until another quest sees activity
+--   3. the mob you have targeted belongs to a quest in your log
+--   4. a quest whose mob you killed / looted in the last 5 minutes (most recent wins)
+--   5. the game-tracked quest, then the most recently active one, else first alphabetically
 local lastSuper, superAt   -- game-tracker focus, and when it last changed
 local function PickQuest(list)
-    if db.focus and db.focus ~= "" then
-        local f = db.focus:lower()
-        -- a focus picked with "Next quest" is soft: activity on another quest releases it
-        if db.focusSoft and db.focusAt then
-            if GetTime() - db.focusAt > 20 or GetTime() < db.focusAt then
-                db.focus, db.focusSoft, db.focusAt = nil, nil, nil   -- peek expired
-            end
-            for _, s in ipairs(list) do
-                if s.lastActive and s.lastActive > db.focusAt and not s.title:lower():find(f, 1, true) then
-                    db.focus, db.focusSoft, db.focusAt = nil, nil, nil
-                    break
-                end
-            end
-        end
-    end
     if db.focus and db.focus ~= "" then
         local f = db.focus:lower()
         for _, s in ipairs(list) do
@@ -706,7 +725,7 @@ local function PickQuest(list)
             if s.members[target] or (s.known and s.known[target]) then hits[#hits + 1] = s end
         end
         if #hits > 0 then
-            local pick, st = hits[1], SuperTrackedId()
+            local pick = hits[1]
             for _, s in ipairs(hits) do
                 if s.lastActive and (not pick.lastActive or s.lastActive > pick.lastActive) then pick = s end
             end
@@ -722,7 +741,6 @@ local function PickQuest(list)
         if s.lastActive and (not best or s.lastActive > best.lastActive) then best = s end
     end
     if best and now - best.lastActive < 300 then return best end
-    local st = SuperTrackedId()
     if st and st ~= 0 then
         for _, s in ipairs(list) do if s.questId == st then return s end end
     end
@@ -810,7 +828,7 @@ Refresh = function()
                 r:Hide()
             end
         end
-        ui.foot:SetText(string.format("%d source(s) known%s", #names, (db.focus and not db.focusSoft) and "  ·  locked (/qmt focus to unlock)" or ""))
+        ui.foot:SetText(string.format("%d source(s) known%s", #names, (db.focus and db.focus ~= "") and "  ·  locked (/qmt focus to unlock)" or ""))
         if #names > MAX_MOBS then
             ui.more:SetText(string.format("%d-%d of %d  ·  scroll for more",
                 scrollOffset + 1, scrollOffset + MAX_MOBS, #names))
@@ -912,11 +930,24 @@ local function RememberUnit(unit)
     end
 end
 
+-- Adds a kill of `name` to every active quest; marks the quest active if the mob belongs to it.
+local function RecordKill(name, markActive)
+    for _, s in ipairs(ActiveSessions()) do
+        local m = Stat(s, name)
+        m.kills = m.kills + 1
+        if s.members[name] or (s.known and s.known[name]) then
+            if markActive then s.lastActive = GetTime() end
+            s.started = true
+            s.latestKill = { name = name, at = time() }
+        end
+    end
+end
+
 local function CountKill(guid, name)
     lastSource = { name = name, at = GetTime() }
     if guid then
         if counted[guid] then return end
-        counted[guid] = true
+        counted[guid] = GetTime()
         guidNames[guid] = name
         -- already counted a moment ago from the XP message?
         if xpCounted[name] and GetTime() - xpCounted[name] < 3 then
@@ -925,15 +956,7 @@ local function CountKill(guid, name)
         end
     end
     lastKillAt[name] = GetTime()
-    lastSource = { name = name, at = GetTime() }
-    for _, s in ipairs(ActiveSessions()) do
-        local m = Mob(s, name)
-        m.kills = m.kills + 1
-        if s.members[name] or (s.known and s.known[name]) then
-            s.lastActive = GetTime(); s.started = true
-            s.latestKill = { name = name, at = time() }
-        end
-    end
+    RecordKill(name, true)
 end
 
 local function OnCombatLog()
@@ -1034,6 +1057,7 @@ local function OnChatLoot(msg)
                         end
                         if s.knownObjs and s.knownObjs[src] then isObj = true end
                         s.members[src] = true
+                        Adopt(s, src)
                         if isObj then s.isObject[src] = true end
                         s.lastActive = GetTime()
                         s.started = true
@@ -1054,7 +1078,7 @@ local function OnChatLoot(msg)
                     end
                 end
                 -- any other item from one of this quest's mobs goes in the tooltip list too
-                if not matched and (s.members[src] or (s.known and s.known[src]) or (s.knownObjs and s.knownObjs[src])) then
+                if not matched and Related(s, src) then
                     AddLoot(Mob(s, src), itemName, link, count)
                 end
             end
@@ -1072,16 +1096,11 @@ local function OnChatXP(msg)
     -- fallback kill count when the combat log didn't report this kill
     if not lastKillAt[name] or GetTime() - lastKillAt[name] > 3 then
         xpCounted[name] = GetTime()
-        for _, s in ipairs(ActiveSessions()) do
-            Mob(s, name).kills = Mob(s, name).kills + 1
-            if s.members[name] or (s.known and s.known[name]) then
-                s.started = true
-                s.latestKill = { name = name, at = time() }
-            end
-        end
+        RecordKill(name, false)
     end
     for _, s in ipairs(ActiveSessions()) do
-        Mob(s, name).xp = Mob(s, name).xp + amount
+        local m = Stat(s, name)
+        m.xp = m.xp + amount
         s.totalXP = s.totalXP + amount
     end
 end
@@ -1094,7 +1113,10 @@ local function OnChatMoney(msg)
     if total <= 0 then return end
     for _, s in ipairs(ActiveSessions()) do
         s.totalCopper = s.totalCopper + total
-        if lastLoot.name then Mob(s, lastLoot.name).copper = Mob(s, lastLoot.name).copper + total end
+        if lastLoot.name then
+            local m = Stat(s, lastLoot.name)
+            m.copper = m.copper + total
+        end
     end
 end
 
@@ -1105,6 +1127,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
         db = QuestMobTrackerDB
         db.quests = db.quests or {}
         db.history = db.history or {}
+        -- "Next quest" used to save a temporary focus; it must not turn into a permanent lock
+        if db.focusSoft then db.focus = nil end
+        db.focusSoft, db.focusAt = nil, nil
         BuildPatterns()
         BuildUI()
     elseif not db then
@@ -1112,7 +1137,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "PLAYER_LOGIN" or event == "QUEST_LOG_UPDATE" or event == "QUEST_ACCEPTED"
         or event == "UNIT_QUEST_LOG_CHANGED" then
         local ok, err = pcall(ScanQuests)
-        if not ok and not QMT_errShown then QMT_errShown = true; print_("Scan error: " .. tostring(err)) end
+        if not ok and not scanErrShown then scanErrShown = true; print_("Scan error: " .. tostring(err)) end
     elseif event == "PLAYER_TARGET_CHANGED" then
         pcall(RememberUnit, "target")
         Refresh()
@@ -1143,12 +1168,28 @@ for _, e in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "QUEST_LOG_UPDATE", "QUEST_
     if not ok then print_("Could not register " .. e .. ": " .. tostring(err)) end
 end
 
-local acc = 0
+-- per-session lookup tables would otherwise grow with every mob ever seen
+local function PruneCaches(now)
+    for guid, t in pairs(counted) do if now - t > 600 then counted[guid] = nil end end
+    for guid, t in pairs(engaged) do if now - t > 600 then engaged[guid] = nil end end
+    local n = 0
+    for _ in pairs(guidNames) do n = n + 1 end
+    if n > 1000 then wipe(guidNames) end
+    for title, p in pairs(pending) do   -- unmatched-mob holding area: keep it small
+        local c = 0
+        for _ in pairs(p) do c = c + 1 end
+        if c > 200 then wipe(p) end
+    end
+end
+
+local acc, sincePrune = 0, 0
 frame:SetScript("OnUpdate", function(_, dt)
     if not db then return end
     acc = acc + dt
     if acc >= 1 then
         local now, inCombat = GetTime(), UnitAffectingCombat("player")
+        sincePrune = sincePrune + acc
+        if sincePrune >= 120 then sincePrune = 0; PruneCaches(now) end
         for _, s in ipairs(ActiveSessions()) do
             s.idle = s.idle or 0
             if not s.completeAt then   -- timers freeze once the objectives are done
@@ -1198,7 +1239,7 @@ SlashCmdList["QMT"] = function(input)
         end
     elseif cmd == "focus" then
         local name = (input or ""):match("^%S+%s+(.+)$")
-        db.focus, db.focusSoft, db.focusAt = name, nil, nil
+        db.focus = name
         print_(name and ("Locked on quest matching '" .. name .. "'.") or "Auto-picking the quest you're working on.")
     elseif cmd == "history" then
         if #db.history == 0 then print_("No finished quests yet.") end
@@ -1211,7 +1252,7 @@ SlashCmdList["QMT"] = function(input)
             print_(string.format("%s: %s, %d kills, %d xp, %s", s.title, FormatTime(s.elapsed), k, x, Money(c)))
         end
     else
-        print_("/qmt show | hide | focus [quest] | scale <n> | alpha <n> | reset | history | debug")
+        print_("/qmt show | hide | focus [quest] | scale <n> | alpha <n> | reset | history | debug | trace")
     end
     Refresh()
 end
