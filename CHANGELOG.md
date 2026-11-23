@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.3
+
+- Follows the quest focused in the game's tracker; stays on it until another quest sees a kill or loot.
+- "Next quest" is now a 20-second peek instead of a lock. Only `/qmt focus` locks.
+- Shorter pre-kill timer label: `in log 3:55:22`.
+
 ## 0.4.2
 
 - Redrew the icon's "!" to match the in-game quest marker (gold, tapered, dark outline).

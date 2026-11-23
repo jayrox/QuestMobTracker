@@ -393,7 +393,7 @@ local function BuildUI()
     -- footer
     ui.foot = Text(ui, "GameFontNormalSmall")
     ui.foot:SetTextColor(0.5, 0.52, 0.58)
-    ui.btnAuto = FlatButton(ui, "Auto", 70, function() db.focus = nil; Refresh() end)
+    ui.btnAuto = FlatButton(ui, "Auto", 70, function() db.focus, db.focusSoft, db.focusAt = nil, nil, nil; Refresh() end)
     ui.btnNext = FlatButton(ui, "Next quest", 90, function()
         local list = ActiveSessions()
         table.sort(list, function(a, b) return a.title < b.title end)
@@ -401,6 +401,7 @@ local function BuildUI()
         local idx = 0
         for i, s in ipairs(list) do if s == picked then idx = i end end
         db.focus = list[(idx % #list) + 1].title
+        db.focusSoft, db.focusAt = true, GetTime()   -- just a peek: expires after 20s or when another quest gets activity
         Refresh()
     end)
     ui.btnReset = FlatButton(ui, "Reset quest", 90, function()
@@ -445,7 +446,23 @@ end
 --   3. a quest whose mob you killed / looted in the last 5 minutes (most recent wins)
 --   3. the quest you selected in the game's tracker
 --   4. most recently active quest this session, else first alphabetically
+local lastSuper, superAt   -- game-tracker focus, and when it last changed
 local function PickQuest(list)
+    if db.focus and db.focus ~= "" then
+        local f = db.focus:lower()
+        -- a focus picked with "Next quest" is soft: activity on another quest releases it
+        if db.focusSoft and db.focusAt then
+            if GetTime() - db.focusAt > 20 or GetTime() < db.focusAt then
+                db.focus, db.focusSoft, db.focusAt = nil, nil, nil   -- peek expired
+            end
+            for _, s in ipairs(list) do
+                if s.lastActive and s.lastActive > db.focusAt and not s.title:lower():find(f, 1, true) then
+                    db.focus, db.focusSoft, db.focusAt = nil, nil, nil
+                    break
+                end
+            end
+        end
+    end
     if db.focus and db.focus ~= "" then
         local f = db.focus:lower()
         for _, s in ipairs(list) do
@@ -453,6 +470,20 @@ local function PickQuest(list)
         end
     end
     local now = GetTime()
+    -- the quest focused in the game's tracker wins until another quest sees activity
+    local st = SuperTrackedId()
+    if st ~= lastSuper then
+        lastSuper = st
+        if st and st ~= 0 then superAt = now end
+    end
+    if superAt and st and st ~= 0 then
+        local focused, otherActive
+        for _, s in ipairs(list) do
+            if s.questId == st then focused = s
+            elseif s.lastActive and s.lastActive > superAt then otherActive = true end
+        end
+        if focused and not otherActive then return focused end
+    end
     -- targeting a mob that belongs to a quest in the log: focus that quest
     local target = UnitExists("target") and not UnitIsPlayer("target") and UnitName("target")
     if target then
@@ -518,7 +549,7 @@ Refresh = function()
 
         ui.title:SetText(s.title)
         ui.timer:SetText((s.completeAt and "|cff66ff66done|r  " or "") .. FormatTime(s.elapsed))
-        ui.idle:SetText(s.started and ("idle " .. FormatTime(s.idle)) or ("idle " .. FormatTime(s.idle) .. " - starts on first kill"))
+        ui.idle:SetText((s.started and "idle " or "in log ") .. FormatTime(s.idle))
 
         local T = ui.tiles
         T[1].value:SetText(kills);  T[1].sub:SetText(string.format("%d / hr", kills / hours))
@@ -556,7 +587,7 @@ Refresh = function()
                 r:Hide()
             end
         end
-        ui.foot:SetText(string.format("%d source(s) known%s", #names, db.focus and "  ·  locked" or ""))
+        ui.foot:SetText(string.format("%d source(s) known%s", #names, (db.focus and not db.focusSoft) and "  ·  locked" or ""))
         if #names > MAX_MOBS then
             ui.more:SetText(string.format("+%d more", #names - MAX_MOBS))
         else
@@ -898,7 +929,7 @@ SlashCmdList["QMT"] = function(input)
         end
     elseif cmd == "focus" then
         local name = (input or ""):match("^%S+%s+(.+)$")
-        db.focus = name
+        db.focus, db.focusSoft, db.focusAt = name, nil, nil
         print_(name and ("Locked on quest matching '" .. name .. "'.") or "Auto-picking the quest you're working on.")
     elseif cmd == "history" then
         if #db.history == 0 then print_("No finished quests yet.") end
