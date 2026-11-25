@@ -18,7 +18,7 @@ local guidNames = {}
 local cleuSeen = {}   -- debug: combat log subevents seen
 local lastLoot = { token = 0 }
 local lastLootSrc   -- {name=, at=} last corpse/object whose loot window we opened (outlives lastLoot)
-local lootPatterns, xpPattern, moneyPatterns, slainSuffix
+local lootPatterns, xpPattern, moneyPatterns, slainSuffix, questDonePat, questExpPat, questMoneyPat
 local scanErrShown   -- only report a quest-scan error once
 
 local function Version()
@@ -265,16 +265,58 @@ local function QuestRewardMoney(questId) return CachedReward("money", questId, F
 local pendingXP = 0   -- reward XP of every completed quest in the log (not yet turned in)
 local pendingList = {}  -- reward XP of each completed quest, for the bar dividers
 local focusXP = 0   -- reward XP of the shown quest when it is not complete yet (purple bar segment)
-local wasComplete = {}   -- questId -> true for quests that were complete at the last scan
 local completeCount = 0   -- quests in the log that are complete (not yet turned in)
 -- quest-related earnings since login (not saved): mob XP/gold of related mobs plus turn-in rewards
 local login = { xp = 0, copper = 0, turnedIn = 0 }
+local dbg = {}   -- debug counters for /qmt kills
+local function Dbg(k, v) dbg[k] = v == nil and ((dbg[k] or 0) + 1) or v end
 
--- turn-in rewards, read from the (cached) quest reward lookups
-local function OnQuestTurnedIn(questId, xpReward, moneyReward)
+-- A quest is counted as completed only on a definite turn-in signal, never just because it left the log (an
+-- abandoned quest leaves the log too, and this client's QUEST_TURNED_IN can come late or not at all):
+--   1. the game's "<quest> completed." message   2. the QUEST_TURNED_IN event   3. Questie's API, if installed.
+-- Whichever arrives first counts it; the others are skipped for the same title.
+local turnedAt = {}
+local titleById = {}     -- questId -> title, from the last scan
+local PAIR_WINDOW = 3   -- seconds: a quest leaving the log and a quest reward line "at the same time"
+local lastTurnInAt = -100
+local reward = { at = -100, used = true }   -- latest quest reward line (Experience gained / Received money)
+local left = {}                              -- quests that just left the log and haven't been explained yet
+
+local function CountTurnIn(title, via)
+    local now = GetTime()
+    if turnedAt[title] and now - turnedAt[title] < 15 then return end
+    turnedAt[title] = now
+    lastTurnInAt = now
+    -- a reward line belonging to this turn-in must not be matched with some other quest leaving the log
+    if now - reward.at < PAIR_WINDOW then reward.used = true end
+    for i = #left, 1, -1 do if left[i].title == title then table.remove(left, i) end end
     login.turnedIn = login.turnedIn + 1
-    login.xp = login.xp + (tonumber(xpReward) or QuestRewardXP(questId) or 0)
-    login.copper = login.copper + (tonumber(moneyReward) or QuestRewardMoney(questId) or 0)
+    Dbg("turn-ins")
+    if db and db.traceLoot then print_("turn-in trace: '" .. tostring(title) .. "' counted via " .. via) end
+end
+
+-- An abandoned quest pays nothing, so a quest leaving the log together with a quest reward line is a turn-in.
+-- The two can arrive in either order.
+local function TryPair()
+    local now = GetTime()
+    for i = #left, 1, -1 do if now - left[i].at > PAIR_WINDOW then table.remove(left, i) end end
+    if reward.used or now - reward.at > PAIR_WINDOW or #left == 0 then return end
+    reward.used = true
+    local q = table.remove(left, 1)
+    CountTurnIn(q.title, "left the log + reward line")
+end
+
+local function QuestLeftLog(title)
+    left[#left + 1] = { title = title, at = GetTime() }
+    TryPair()
+end
+
+local function QuestRewardSeen()
+    local now = GetTime()
+    reward.at = now
+    -- already explained by a turn-in counted a moment ago (e.g. the "completed." message came first)?
+    reward.used = now - lastTurnInAt < PAIR_WINDOW
+    TryPair()
 end
 
 local function ScanQuests()
@@ -283,11 +325,9 @@ local function ScanQuests()
     local log = ReadQuestLog()
     wipe(pendingList)
     completeCount = 0
-    local inLog, nowComplete = {}, {}
     for _, q in ipairs(log) do
-        inLog[q.questId] = true
+        titleById[q.questId or 0] = q.title
         if q.complete then
-            nowComplete[q.questId] = true
             completeCount = completeCount + 1
             local r = QuestRewardXP(q.questId) or 0
             QuestRewardMoney(q.questId)   -- warm the cache while the quest is still in the log
@@ -296,13 +336,6 @@ local function ScanQuests()
         end
     end
     pendingXP = pend
-    -- a quest that was complete and has left the log was turned in (the turn-in event itself isn't used)
-    if #log > 0 then
-        for id in pairs(wasComplete) do
-            if not inLog[id] then OnQuestTurnedIn(id) end
-        end
-    end
-    wasComplete = nowComplete
     for _, q in ipairs(log) do
         local title = q.title
         local objs = {}
@@ -355,6 +388,7 @@ local function ScanQuests()
     for title, s in pairs(db.quests) do
         if s.active and not seen[title] then
             s.active = false
+            QuestLeftLog(title)
             print_("'" .. title .. "' left your log. Total time in log " .. FormatTime(s.elapsed + (s.idle or 0))
                 .. " (active " .. FormatTime(s.elapsed) .. ").")
         end
@@ -1016,6 +1050,10 @@ local function BuildPatterns()
         silver = GP(SILVER_AMOUNT or "%d Silver"),
         copper = GP(COPPER_AMOUNT or "%d Copper"),
     }
+    -- the game's own turn-in messages: "<quest> completed.", "Experience gained: N.", "Received <money>."
+    questDonePat = GP(ERR_QUEST_COMPLETE_S or "%s completed.", true)
+    questExpPat = GP(ERR_QUEST_REWARD_EXP_I or "Experience gained: %d.", true)
+    questMoneyPat = GP(ERR_QUEST_REWARD_MONEY_S or "Received %s.", true)
     slainSuffix = (QUEST_MONSTERS_KILLED or "%s slain: %d/%d"):match("%%s(.-):")
 end
 
@@ -1058,8 +1096,6 @@ local function RecordKill(name, markActive)
 end
 
 local xpUnclaimed = {}   -- name -> {count, at}: XP-message kills whose corpse we haven't seen looted yet
-local dbg = {}   -- debug counters for /qmt kills
-local function Dbg(k, v) dbg[k] = v == nil and ((dbg[k] or 0) + 1) or v end
 local killVia = {}   -- debug: kills recorded per detection path (combat log / target death / xp message)
 local function CountKill(guid, name, via)
     lastSource = { name = name, at = GetTime() }
@@ -1070,6 +1106,9 @@ local function CountKill(guid, name, via)
         -- already counted a moment ago from the XP message?
         if xpCounted[name] and GetTime() - xpCounted[name] < 3 then
             xpCounted[name] = nil
+            -- this corpse is now identified, so the XP kill's "claim the next loot" marker is spent
+            local u = xpUnclaimed[name]
+            if u and u.count > 0 then u.count = u.count - 1 end
             return
         end
     end
@@ -1282,7 +1321,48 @@ local function OnChatXP(msg)
     if related then login.xp = login.xp + amount end
 end
 
+local function MoneyIn(text)
+    local g = tonumber(text:match(moneyPatterns.gold)) or 0
+    local sv = tonumber(text:match(moneyPatterns.silver)) or 0
+    local c = tonumber(text:match(moneyPatterns.copper)) or 0
+    return g * 10000 + sv * 100 + c
+end
+
+-- Quest turn-in messages. Returns true when the line was one of them. Quests that only finish at the
+-- hand-in aren't "complete" in the log beforehand, so the log can't tell us; the messages can.
+local lastQuestMoney = { amount = 0, at = -10 }
+local function OnQuestMsg(msg)
+    if not (questDonePat and msg) then return false end
+    local title = msg:match(questDonePat)
+    if title then
+        CountTurnIn(title, "completed message")
+        return true
+    end
+    local xp = tonumber(msg:match(questExpPat))
+    if xp then
+        QuestRewardSeen()
+        login.xp = login.xp + xp
+        Dbg("quest xp seen", (dbg["quest xp seen"] or 0) + xp)
+        if db.traceLoot then print_("turn-in trace: +" .. xp .. " xp") end
+        return true
+    end
+    local money = msg:match(questMoneyPat)
+    if money then
+        local total = MoneyIn(money)
+        if total > 0 then QuestRewardSeen() end
+        -- the same line can reach both chat events; count it once
+        if total > 0 and not (lastQuestMoney.amount == total and GetTime() - lastQuestMoney.at < 1) then
+            lastQuestMoney.amount, lastQuestMoney.at = total, GetTime()
+            login.copper = login.copper + total
+            if db.traceLoot then print_("turn-in trace: +" .. total .. " copper") end
+        end
+        return true
+    end
+    return false
+end
+
 local function OnChatMoney(msg)
+    if OnQuestMsg(msg) then return end   -- quest reward money is not mob gold
     local g = tonumber(msg:match(moneyPatterns.gold)) or 0
     local sv = tonumber(msg:match(moneyPatterns.silver)) or 0
     local c = tonumber(msg:match(moneyPatterns.copper)) or 0
@@ -1308,6 +1388,33 @@ local function OnChatMoney(msg)
 end
 
 
+-- Name of a quest by id: from the last scan, else Questie's database (the quest may never have been in the log).
+local function TitleFor(questId)
+    if not questId then return nil end
+    if titleById[questId] then return titleById[questId] end
+    local name
+    if QuestieLoader and QuestieLoader.ImportModule then
+        local ok, DB = pcall(function() return QuestieLoader:ImportModule("QuestieDB") end)
+        if ok and DB and DB.QueryQuestSingle then name = Try(DB.QueryQuestSingle, questId, "name") end
+    end
+    return name or ("quest " .. tostring(questId))
+end
+
+-- Backup signal: Questie's public API reports turn-ins and abandons separately and already copes with this
+-- client's late/missing QUEST_TURNED_IN.
+local questieHooked = false
+local function HookQuestie()
+    if questieHooked then return end
+    local api = Questie and Questie.API
+    if not (api and type(api.RegisterForQuestUpdates) == "function") then return end
+    questieHooked = true
+    local reasons = api.Enums and api.Enums.QuestUpdateTriggerReason
+    local turnedIn = reasons and reasons.QUEST_TURNED_IN or 3
+    api.RegisterForQuestUpdates(function(questId, _, why)
+        if why == turnedIn then CountTurnIn(TitleFor(questId), "Questie API") end
+    end)
+end
+
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if (...) ~= ADDON then return end
@@ -1322,8 +1429,12 @@ frame:SetScript("OnEvent", function(_, event, ...)
         BuildUI()
     elseif not db then
         return
+    elseif event == "QUEST_TURNED_IN" then
+        local questId = ...
+        pcall(function() CountTurnIn(TitleFor(questId), "QUEST_TURNED_IN event") end)
     elseif event == "PLAYER_LOGIN" or event == "QUEST_LOG_UPDATE" or event == "QUEST_ACCEPTED"
         or event == "UNIT_QUEST_LOG_CHANGED" then
+        pcall(HookQuestie)
         local ok, err = pcall(ScanQuests)
         if not ok and not scanErrShown then scanErrShown = true; print_("Scan error: " .. tostring(err)) end
     elseif event == "PLAYER_TARGET_CHANGED" then
@@ -1354,6 +1465,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         OnChatXP((...))
     elseif event == "CHAT_MSG_MONEY" then
         OnChatMoney((...))
+    elseif event == "CHAT_MSG_SYSTEM" then
+        pcall(OnQuestMsg, (...))
     end
 end)
 
@@ -1390,6 +1503,8 @@ registering = "LOOT_OPENED"; Registered("LOOT_OPENED", pcall(frame.RegisterEvent
 registering = "LOOT_CLOSED"; Registered("LOOT_CLOSED", pcall(frame.RegisterEvent, frame, "LOOT_CLOSED"))
 registering = "CHAT_MSG_LOOT"; Registered("CHAT_MSG_LOOT", pcall(frame.RegisterEvent, frame, "CHAT_MSG_LOOT"))
 registering = "CHAT_MSG_COMBAT_XP_GAIN"; Registered("CHAT_MSG_COMBAT_XP_GAIN", pcall(frame.RegisterEvent, frame, "CHAT_MSG_COMBAT_XP_GAIN"))
+registering = "QUEST_TURNED_IN"; Registered("QUEST_TURNED_IN", pcall(frame.RegisterEvent, frame, "QUEST_TURNED_IN"))
+registering = "CHAT_MSG_SYSTEM"; Registered("CHAT_MSG_SYSTEM", pcall(frame.RegisterEvent, frame, "CHAT_MSG_SYSTEM"))
 registering = "CHAT_MSG_MONEY"; Registered("CHAT_MSG_MONEY", pcall(frame.RegisterEvent, frame, "CHAT_MSG_MONEY"))
 
 -- per-session lookup tables would otherwise grow with every mob ever seen

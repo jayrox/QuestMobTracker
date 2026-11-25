@@ -2,6 +2,13 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.16
+
+- Quests completed (session tooltip) now counts only definite turn-ins, so abandoned quests are not counted: the game's `<quest> completed.` message, the `QUEST_TURNED_IN` event, a quest leaving the log within 3s of a quest reward line (`Experience gained` / `Received <money>`), or Questie's `RegisterForQuestUpdates` API (backup, if Questie is installed).
+- Session quest XP and gold come from the game's reward lines (`Experience gained: N.`, `Received <money>.`) instead of lookups; the reward money line is no longer credited to a looted mob.
+- An XP-message kill only leaves its loot-claim marker when it counted the kill, and the marker is released when the corpse is identified, so it can't swallow a later loot-only kill.
+- `/qmt kills` detail line adds turn-in and quest XP counters; `/qmt trace` prints turn-in lines.
+
 ## 0.4.15
 
 - Nameplate kill detection: every visible creature nameplate is watched (`NAME_PLATE_UNIT_ADDED/REMOVED`, `UNIT_HEALTH` on the plate, plus the 1s check). A dead, not tap-denied creature counts as a kill even when it was never targeted.
