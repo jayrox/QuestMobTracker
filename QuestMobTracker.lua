@@ -21,6 +21,12 @@ local lastLootSrc   -- {name=, at=} last corpse/object whose loot window we open
 local lootPatterns, xpPattern, moneyPatterns, slainSuffix
 local scanErrShown   -- only report a quest-scan error once
 
+local function Version()
+    local get = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+    local ok, v = pcall(function() return get and get(ADDON, "Version") end)
+    return ok and v or "?"
+end
+
 local function print_(msg) print("|cff33ccff[QMT]|r " .. tostring(msg)) end
 
 ---------------------------------------------------------------------------
@@ -259,9 +265,17 @@ local function QuestRewardMoney(questId) return CachedReward("money", questId, F
 local pendingXP = 0   -- reward XP of every completed quest in the log (not yet turned in)
 local pendingList = {}  -- reward XP of each completed quest, for the bar dividers
 local focusXP = 0   -- reward XP of the shown quest when it is not complete yet (purple bar segment)
+local wasComplete = {}   -- questId -> true for quests that were complete at the last scan
 local completeCount = 0   -- quests in the log that are complete (not yet turned in)
 -- quest-related earnings since login (not saved): mob XP/gold of related mobs plus turn-in rewards
 local login = { xp = 0, copper = 0, turnedIn = 0 }
+
+-- turn-in rewards, read from the (cached) quest reward lookups
+local function OnQuestTurnedIn(questId, xpReward, moneyReward)
+    login.turnedIn = login.turnedIn + 1
+    login.xp = login.xp + (tonumber(xpReward) or QuestRewardXP(questId) or 0)
+    login.copper = login.copper + (tonumber(moneyReward) or QuestRewardMoney(questId) or 0)
+end
 
 local function ScanQuests()
     local seen = {}
@@ -269,15 +283,26 @@ local function ScanQuests()
     local log = ReadQuestLog()
     wipe(pendingList)
     completeCount = 0
+    local inLog, nowComplete = {}, {}
     for _, q in ipairs(log) do
+        inLog[q.questId] = true
         if q.complete then
+            nowComplete[q.questId] = true
             completeCount = completeCount + 1
             local r = QuestRewardXP(q.questId) or 0
+            QuestRewardMoney(q.questId)   -- warm the cache while the quest is still in the log
             pend = pend + r
             if r > 0 then pendingList[#pendingList + 1] = r end
         end
     end
     pendingXP = pend
+    -- a quest that was complete and has left the log was turned in (the turn-in event itself isn't used)
+    if #log > 0 then
+        for id in pairs(wasComplete) do
+            if not inLog[id] then OnQuestTurnedIn(id) end
+        end
+    end
+    wasComplete = nowComplete
     for _, q in ipairs(log) do
         local title = q.title
         local objs = {}
@@ -338,6 +363,7 @@ end
 
 local function Debug()
     local t = {}
+    print_("Quest Mob Tracker v" .. Version())
     for k, v in pairs(cleuSeen) do t[#t + 1] = k .. "=" .. v end
     table.sort(t)
     print_("Combat log events seen: " .. (#t > 0 and table.concat(t, ", ") or "none"))
@@ -1031,7 +1057,11 @@ local function RecordKill(name, markActive)
     end
 end
 
-local function CountKill(guid, name)
+local xpUnclaimed = {}   -- name -> {count, at}: XP-message kills whose corpse we haven't seen looted yet
+local dbg = {}   -- debug counters for /qmt kills
+local function Dbg(k, v) dbg[k] = v == nil and ((dbg[k] or 0) + 1) or v end
+local killVia = {}   -- debug: kills recorded per detection path (combat log / target death / xp message)
+local function CountKill(guid, name, via)
     lastSource = { name = name, at = GetTime() }
     if guid then
         if counted[guid] then return end
@@ -1044,6 +1074,8 @@ local function CountKill(guid, name)
         end
     end
     lastKillAt[name] = GetTime()
+    killVia[via or "?"] = (killVia[via or "?"] or 0) + 1
+    if db.traceLoot then print_("kill trace: " .. name .. " counted via " .. tostring(via)) end
     RecordKill(name, true)
 end
 
@@ -1056,11 +1088,11 @@ local function OnCombatLog()
     local mine = srcGUID == UnitGUID("player") or (UnitGUID("pet") and srcGUID == UnitGUID("pet"))
     if sub == "PARTY_KILL" then
         guidNames[destGUID] = destName
-        if mine then CountKill(destGUID, destName) end
+        if mine then CountKill(destGUID, destName, "combat log PARTY_KILL") end
     elseif sub == "UNIT_DIED" then
         guidNames[destGUID] = destName
         -- fallback: PARTY_KILL doesn't always fire; count mobs we hit in the last minute
-        if engaged[destGUID] and GetTime() - engaged[destGUID] < 60 then CountKill(destGUID, destName) end
+        if engaged[destGUID] and GetTime() - engaged[destGUID] < 60 then CountKill(destGUID, destName, "combat log UNIT_DIED") end
     elseif mine and not destGUID:find("^Player") and
         (sub:find("_DAMAGE$") or sub == "SPELL_PERIODIC_DAMAGE" or sub == "SWING_DAMAGE") then
         engaged[destGUID] = GetTime()
@@ -1069,13 +1101,20 @@ end
 
 -- The combat log isn't available to addons on every client, so also watch the
 -- target's health: when it dies and the kill was yours, count it.
-local function OnTargetHealth()
-    if not UnitExists("target") or UnitIsPlayer("target") or not UnitIsDead("target") then return end
-    if UnitIsTapDenied and UnitIsTapDenied("target") then return end
+local function TargetIsDead()
+    if UnitIsDead("target") then return true end
+    return UnitHealth and UnitHealthMax and (UnitHealthMax("target") or 0) > 0 and (UnitHealth("target") or 1) <= 0
+end
+
+local function OnTargetHealth(poll)
+    if not poll then Dbg("health events") end
+    if not UnitExists("target") or UnitIsPlayer("target") or not TargetIsDead() then return end
+    Dbg("target dead")
+    if UnitIsTapDenied and UnitIsTapDenied("target") then Dbg("tap denied"); return end
     local guid, name = UnitGUID("target"), UnitName("target")
     if guid and name then
         guidNames[guid] = name
-        CountKill(guid, name)
+        CountKill(guid, name, poll and "target dead (1s check)" or "target death (UNIT_HEALTH)")
     end
 end
 
@@ -1088,6 +1127,7 @@ local function OnLootOpened()
         end
     end
     lastLoot.token = lastLoot.token + 1
+    Dbg("loot opened"); Dbg("last loot guid", tostring(guid))
     lastLoot.guid = guid
     lastLoot.isObject = false
     local name = guid and guidNames[guid]
@@ -1098,6 +1138,17 @@ local function OnLootOpened()
     name = name or UnitName("target")
         or (lastXPName and lastXPAt and GetTime() - lastXPAt < 30 and lastXPName) or nil
     lastLoot.name = name
+    -- Fallback kill: looting a creature corpse we never counted (no combat log here, and no XP message
+    -- for grey mobs). Only when the name is certain: from the GUID itself or the target holding it.
+    local claim = guid and name and xpUnclaimed[name]
+    if claim and claim.count > 0 and GetTime() - claim.at <= 120 and not counted[guid] then
+        claim.count = claim.count - 1
+        counted[guid] = GetTime()   -- this corpse was already counted from its XP message
+    elseif guid and guid:find("^Creature") and not counted[guid] then
+        local kname = guidNames[guid] or (UnitGUID("target") == guid and UnitName("target")) or nil
+        if kname then pcall(CountKill, guid, kname, "loot") else Dbg("loot: corpse name unknown") end
+    elseif guid and counted[guid] then Dbg("loot: already counted")
+    elseif guid then Dbg("loot: not a creature guid") end
     if name then lastLootSrc = { name = name, at = GetTime() } end
     if name and not lastLoot.isObject then lastSource = { name = name, at = GetTime() } end
 end
@@ -1181,10 +1232,22 @@ local function OnChatXP(msg)
     amount = tonumber(amount)
     if not (name and amount) then return end
     lastXPName, lastXPAt = name, GetTime()
+    do   -- remember which corpse this was, so looting it later isn't counted as another kill
+        local tg = UnitGUID("target")
+        if tg and UnitName("target") == name then
+            counted[tg] = GetTime(); guidNames[tg] = name
+        else   -- corpse unknown: let the next loot of this name claim this kill instead of counting again
+            local u = xpUnclaimed[name]
+            if not u or GetTime() - u.at > 120 then u = { count = 0 }; xpUnclaimed[name] = u end
+            u.count, u.at = u.count + 1, GetTime()
+        end
+    end
     lastSource = { name = name, at = GetTime() }
     -- fallback kill count when the combat log didn't report this kill
     if not lastKillAt[name] or GetTime() - lastKillAt[name] > 3 then
         xpCounted[name] = GetTime()
+        killVia["xp message"] = (killVia["xp message"] or 0) + 1
+        if db.traceLoot then print_("kill trace: " .. name .. " counted via xp message (CHAT_MSG_COMBAT_XP_GAIN)") end
         RecordKill(name, false)
     end
     local related = false
@@ -1222,12 +1285,6 @@ local function OnChatMoney(msg)
     if related then login.copper = login.copper + total end
 end
 
--- turn-in rewards (QUEST_TURNED_IN passes questID, xpReward, moneyReward)
-local function OnQuestTurnedIn(questId, xpReward, moneyReward)
-    login.turnedIn = login.turnedIn + 1
-    login.xp = login.xp + (tonumber(xpReward) or QuestRewardXP(questId) or 0)
-    login.copper = login.copper + (tonumber(moneyReward) or QuestRewardMoney(questId) or 0)
-end
 
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -1247,9 +1304,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
         or event == "UNIT_QUEST_LOG_CHANGED" then
         local ok, err = pcall(ScanQuests)
         if not ok and not scanErrShown then scanErrShown = true; print_("Scan error: " .. tostring(err)) end
-    elseif event == "QUEST_TURNED_IN" then
-        pcall(OnQuestTurnedIn, ...)
-        pcall(ScanQuests)
     elseif event == "PLAYER_TARGET_CHANGED" then
         pcall(RememberUnit, "target")
         Refresh()
@@ -1260,8 +1314,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if not ok then cleuSeen["ERR " .. tostring(err):sub(1, 80)] = 1 end
     elseif event == "UNIT_HEALTH" then
         if (...) == "target" then pcall(OnTargetHealth) end
-    elseif event == "LOOT_OPENED" then
-        OnLootOpened()
+    elseif event == "LOOT_OPENED" or event == "LOOT_READY" then
+        OnLootOpened()   -- with auto-loot LOOT_READY comes first and the window may close before LOOT_OPENED
     elseif event == "LOOT_CLOSED" then
         OnLootClosed()
     elseif event == "CHAT_MSG_LOOT" then
@@ -1273,13 +1327,38 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 end)
 
--- COMBAT_LOG_EVENT_UNFILTERED is deliberately not registered: this client protects it from addons
-for _, e in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "QUEST_LOG_UPDATE", "QUEST_ACCEPTED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
-    "UNIT_QUEST_LOG_CHANGED", "UNIT_HEALTH", "LOOT_OPENED", "LOOT_CLOSED",
-    "CHAT_MSG_LOOT", "CHAT_MSG_COMBAT_XP_GAIN", "CHAT_MSG_MONEY", "QUEST_TURNED_IN" }) do
-    local ok, err = pcall(frame.RegisterEvent, frame, e)
-    if not ok then print_("Could not register " .. e .. ": " .. tostring(err)) end
+-- diagnostic: the client blocks a protected call without saying which; remember what we were registering
+local registering
+local diag = CreateFrame("Frame")
+pcall(diag.RegisterEvent, diag, "ADDON_ACTION_FORBIDDEN")
+diag:SetScript("OnEvent", function(_, _, addon, func)
+    if addon == ADDON then print_("Blocked call " .. tostring(func) .. " while registering " .. tostring(registering)) end
+end)
+
+-- One call per event on purpose: a blocked (protected) call is reported with its line number,
+-- so the line tells us which event the client refused.
+local function Registered(e, ok, err)
+    registering = nil
+    -- a protected event is blocked (and logged by BugGrabber) rather than raising an error, so check
+    if not ok then print_("Could not register " .. e .. ": " .. tostring(err))
+    elseif frame.IsEventRegistered and not frame:IsEventRegistered(e) then print_("Event blocked by the client: " .. e) end
 end
+
+registering = "ADDON_LOADED"; Registered("ADDON_LOADED", pcall(frame.RegisterEvent, frame, "ADDON_LOADED"))
+registering = "PLAYER_LOGIN"; Registered("PLAYER_LOGIN", pcall(frame.RegisterEvent, frame, "PLAYER_LOGIN"))
+registering = "QUEST_LOG_UPDATE"; Registered("QUEST_LOG_UPDATE", pcall(frame.RegisterEvent, frame, "QUEST_LOG_UPDATE"))
+registering = "QUEST_ACCEPTED"; Registered("QUEST_ACCEPTED", pcall(frame.RegisterEvent, frame, "QUEST_ACCEPTED"))
+registering = "PLAYER_TARGET_CHANGED"; Registered("PLAYER_TARGET_CHANGED", pcall(frame.RegisterEvent, frame, "PLAYER_TARGET_CHANGED"))
+registering = "UPDATE_MOUSEOVER_UNIT"; Registered("UPDATE_MOUSEOVER_UNIT", pcall(frame.RegisterEvent, frame, "UPDATE_MOUSEOVER_UNIT"))
+registering = "UNIT_QUEST_LOG_CHANGED"; Registered("UNIT_QUEST_LOG_CHANGED", pcall(frame.RegisterEvent, frame, "UNIT_QUEST_LOG_CHANGED"))
+-- COMBAT_LOG_EVENT_UNFILTERED is not registered: this client blocks it for addons (nothing is ever delivered)
+registering = "UNIT_HEALTH"; Registered("UNIT_HEALTH", pcall(frame.RegisterEvent, frame, "UNIT_HEALTH"))
+registering = "LOOT_READY"; Registered("LOOT_READY", pcall(frame.RegisterEvent, frame, "LOOT_READY"))
+registering = "LOOT_OPENED"; Registered("LOOT_OPENED", pcall(frame.RegisterEvent, frame, "LOOT_OPENED"))
+registering = "LOOT_CLOSED"; Registered("LOOT_CLOSED", pcall(frame.RegisterEvent, frame, "LOOT_CLOSED"))
+registering = "CHAT_MSG_LOOT"; Registered("CHAT_MSG_LOOT", pcall(frame.RegisterEvent, frame, "CHAT_MSG_LOOT"))
+registering = "CHAT_MSG_COMBAT_XP_GAIN"; Registered("CHAT_MSG_COMBAT_XP_GAIN", pcall(frame.RegisterEvent, frame, "CHAT_MSG_COMBAT_XP_GAIN"))
+registering = "CHAT_MSG_MONEY"; Registered("CHAT_MSG_MONEY", pcall(frame.RegisterEvent, frame, "CHAT_MSG_MONEY"))
 
 -- per-session lookup tables would otherwise grow with every mob ever seen
 local function PruneCaches(now)
@@ -1303,6 +1382,9 @@ frame:SetScript("OnUpdate", function(_, dt)
         local now, inCombat = GetTime(), UnitAffectingCombat("player")
         sincePrune = sincePrune + acc
         if sincePrune >= 120 then sincePrune = 0; PruneCaches(now) end
+        -- UNIT_HEALTH is sparse on this client, so also look at the target once a second
+        local tg = UnitExists("target") and UnitGUID("target")
+        if tg and not counted[tg] then pcall(OnTargetHealth, true) end
         for _, s in ipairs(ActiveSessions()) do
             s.idle = s.idle or 0
             if not s.completeAt then   -- timers freeze once the objectives are done
@@ -1331,9 +1413,21 @@ SlashCmdList["QMT"] = function(input)
         db.hidden = true; ui:Hide()
     elseif cmd == "debug" then
         Debug()
+    elseif cmd == "kills" then
+        local t, k = {}, {}
+        print_("Quest Mob Tracker v" .. Version())
+        for n, v in pairs(cleuSeen) do t[#t + 1] = n .. "=" .. v end
+        for n, v in pairs(killVia) do k[#k + 1] = n .. "=" .. v end
+        table.sort(t); table.sort(k)
+        print_("Combat log events received: " .. (#t > 0 and table.concat(t, ", ") or "none"))
+        print_("Kills counted by: " .. (#k > 0 and table.concat(k, ", ") or "nothing yet"))
+        local d = {}
+        for n, v in pairs(dbg) do d[#d + 1] = n .. "=" .. tostring(v) end
+        table.sort(d)
+        print_("Detail: " .. (#d > 0 and table.concat(d, ", ") or "no events yet"))
     elseif cmd == "trace" then
         db.traceLoot = not db.traceLoot
-        print_("Loot trace " .. (db.traceLoot and "ON: loot a Mote and send me the line." or "off"))
+        print_("Trace " .. (db.traceLoot and "ON: prints each kill (and the path that counted it) and each money line." or "off"))
     elseif cmd == "scale" then
         local v = tonumber((input or ""):match("^%S+%s+(%S+)"))
         if v and v >= 0.4 and v <= 2 then
@@ -1365,7 +1459,7 @@ SlashCmdList["QMT"] = function(input)
             print_(string.format("%s: %s, %d kills, %d xp, %s", s.title, FormatTime(s.elapsed), k, x, Money(c)))
         end
     else
-        print_("/qmt show | hide | focus [quest] | scale <n> | alpha <n> | reset | history | debug | trace")
+        print_("/qmt show | hide | focus [quest] | scale <n> | alpha <n> | reset | history | kills | debug | trace")
     end
     Refresh()
 end

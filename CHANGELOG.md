@@ -2,6 +2,15 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.14
+
+- Kill detection: this client delivers no combat log events (registering `COMBAT_LOG_EVENT_UNFILTERED` raised ADDON_ACTION_FORBIDDEN), so it is no longer registered.
+- Looting a creature corpse that nothing else counted now counts a kill (also catches grey mobs); `LOOT_READY` is handled so auto-loot works. An XP-message kill claims its corpse's loot so it isn't counted twice.
+- The target is also checked for death once a second, since `UNIT_HEALTH` is sparse here.
+- Turn-ins are detected when a completed quest leaves the log (no `QUEST_TURNED_IN` event).
+- `/qmt kills` shows which paths counted kills plus detail counters; `/qmt trace` prints each kill and the path that counted it; `/qmt debug` and `/qmt kills` show the addon version.
+- Events are registered one per line, with a check that names any event the client blocks.
+
 ## 0.4.13
 
 - XP bar: light purple segment after the green one showing where the bar would reach if the shown quest were completed; follows the focus, with a tooltip line.
