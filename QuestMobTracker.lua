@@ -258,6 +258,7 @@ local function QuestRewardMoney(questId) return CachedReward("money", questId, F
 
 local pendingXP = 0   -- reward XP of every completed quest in the log (not yet turned in)
 local pendingList = {}  -- reward XP of each completed quest, for the bar dividers
+local focusXP = 0   -- reward XP of the shown quest when it is not complete yet (purple bar segment)
 local completeCount = 0   -- quests in the log that are complete (not yet turned in)
 -- quest-related earnings since login (not saved): mob XP/gold of related mobs plus turn-in rewards
 local login = { xp = 0, copper = 0, turnedIn = 0 }
@@ -317,6 +318,7 @@ local function ScanQuests()
             for name in pairs(pending[title] or {}) do
                 if Related(s, name) then Adopt(s, name) end
             end
+            s.complete = q.complete and true or false
             if not q.complete and s.completeAt then s.completeAt = nil end
             if q.complete and s.started and not s.completeAt then
                 s.completeAt = s.elapsed
@@ -328,7 +330,8 @@ local function ScanQuests()
     for title, s in pairs(db.quests) do
         if s.active and not seen[title] then
             s.active = false
-            print_("'" .. title .. "' left your log. Final time " .. FormatTime(s.elapsed) .. ".")
+            print_("'" .. title .. "' left your log. Total time in log " .. FormatTime(s.elapsed + (s.idle or 0))
+                .. " (active " .. FormatTime(s.elapsed) .. ").")
         end
     end
 end
@@ -684,6 +687,9 @@ local function BuildUI()
     ui.xpBar.pend = ui.xpBar:CreateTexture(nil, "ARTWORK")
     ui.xpBar.pend:SetColorTexture(0.3, 0.85, 0.4, 0.95)
     ui.xpBar.pend:SetPoint("TOPLEFT", ui.xpBar.cur, "TOPRIGHT"); ui.xpBar.pend:SetPoint("BOTTOMLEFT", ui.xpBar.cur, "BOTTOMRIGHT")
+    ui.xpBar.focus = ui.xpBar:CreateTexture(nil, "ARTWORK")   -- reward of the shown quest, if not yet complete
+    ui.xpBar.focus:SetColorTexture(0.72, 0.58, 1, 0.9)
+    ui.xpBar.focus:SetPoint("TOPLEFT", ui.xpBar.pend, "TOPRIGHT"); ui.xpBar.focus:SetPoint("BOTTOMLEFT", ui.xpBar.pend, "BOTTOMRIGHT")
     ui.xpBar.div = {}
     ui.xpBar:SetScript("OnEnter", function(self)
         local xp, mx = UnitXP("player"), UnitXPMax("player")
@@ -693,6 +699,9 @@ local function BuildUI()
         GameTooltip:AddDoubleLine("Current", string.format("%d / %d (%.0f%%)", xp, mx, xp / mx * 100), 0.4, 0.7, 1, 1, 1, 1)
         GameTooltip:AddDoubleLine("Completed quests", string.format("+%d (%.0f%%)", pendingXP, pendingXP / mx * 100), 0.4, 0.9, 0.5, 1, 1, 1)
         GameTooltip:AddDoubleLine("After turn-ins", string.format("%d / %d", xp + pendingXP, mx), 0.7, 0.7, 0.7, 1, 1, 1)
+        if focusXP > 0 then
+            GameTooltip:AddDoubleLine("If shown quest is done", string.format("+%d -> %d / %d", focusXP, xp + pendingXP + focusXP, mx), 0.72, 0.58, 1, 1, 1, 1)
+        end
         GameTooltip:AddDoubleLine("Remaining", tostring(math.max(0, mx - xp - pendingXP)), 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddLine(" ")
         GameTooltip:AddLine("This session (quest related)", 1, 0.82, 0)
@@ -934,6 +943,12 @@ Refresh = function()
         ui.xpBar.cur:SetWidth(math.max(0.001, curW))
         ui.xpBar.pend:SetWidth(math.max(0.001, pendW))
         ui.xpBar.pend:SetShown(pendW > 0.5)
+        -- light purple: where the bar would reach if the shown quest were completed too
+        local fx = (s and not s.complete and s.rewardXP) or 0
+        focusXP = fx
+        local focW = math.min(bw - curW - pendW, bw * fx / mx)
+        ui.xpBar.focus:SetWidth(math.max(0.001, focW))
+        ui.xpBar.focus:SetShown(focW > 0.5)
         -- thin dark divider after each completed quest's share (except the last)
         local x, shown = curW, 0
         for i = 1, #pendingList - 1 do
@@ -1258,8 +1273,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
     end
 end)
 
+-- COMBAT_LOG_EVENT_UNFILTERED is deliberately not registered: this client protects it from addons
 for _, e in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "QUEST_LOG_UPDATE", "QUEST_ACCEPTED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
-    "UNIT_QUEST_LOG_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED", "UNIT_HEALTH", "LOOT_OPENED", "LOOT_CLOSED",
+    "UNIT_QUEST_LOG_CHANGED", "UNIT_HEALTH", "LOOT_OPENED", "LOOT_CLOSED",
     "CHAT_MSG_LOOT", "CHAT_MSG_COMBAT_XP_GAIN", "CHAT_MSG_MONEY", "QUEST_TURNED_IN" }) do
     local ok, err = pcall(frame.RegisterEvent, frame, e)
     if not ok then print_("Could not register " .. e .. ": " .. tostring(err)) end

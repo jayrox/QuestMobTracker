@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.13
+
+- XP bar: light purple segment after the green one showing where the bar would reach if the shown quest were completed; follows the focus, with a tooltip line.
+- "Left your log" message reports total time in log, with active time in brackets.
+- No longer registers COMBAT_LOG_EVENT_UNFILTERED (protected in this client; it raised ADDON_ACTION_FORBIDDEN).
+
 ## 0.4.12
 
 - XP bar: thin dark dividers between each completed quest's share of the green section.
