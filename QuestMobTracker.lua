@@ -257,13 +257,24 @@ local function QuestRewardXP(questId) return CachedReward("xp", questId, FetchRe
 local function QuestRewardMoney(questId) return CachedReward("money", questId, FetchRewardMoney) end
 
 local pendingXP = 0   -- reward XP of every completed quest in the log (not yet turned in)
+local pendingList = {}  -- reward XP of each completed quest, for the bar dividers
+local completeCount = 0   -- quests in the log that are complete (not yet turned in)
+-- quest-related earnings since login (not saved): mob XP/gold of related mobs plus turn-in rewards
+local login = { xp = 0, copper = 0, turnedIn = 0 }
 
 local function ScanQuests()
     local seen = {}
     local pend = 0
     local log = ReadQuestLog()
+    wipe(pendingList)
+    completeCount = 0
     for _, q in ipairs(log) do
-        if q.complete then pend = pend + (QuestRewardXP(q.questId) or 0) end
+        if q.complete then
+            completeCount = completeCount + 1
+            local r = QuestRewardXP(q.questId) or 0
+            pend = pend + r
+            if r > 0 then pendingList[#pendingList + 1] = r end
+        end
     end
     pendingXP = pend
     for _, q in ipairs(log) do
@@ -346,6 +357,21 @@ local ACCENT = { 1.0, 0.72, 0.25 }
 local W, PAD, MAX_MOBS, MAX_OBJ = 372, 12, 5, 5
 local scrollOffset, scrollTitle = 0, nil   -- source list scroll position
 local OBJ_H = 14
+
+-- red -> orange -> yellow -> green, the tracker's quest-difficulty colors; green only when complete
+local PROGRESS_STOPS = { { 1, 0.20, 0.20 }, { 1, 0.50, 0.15 }, { 1, 0.82, 0.10 }, { 0.40, 1, 0.40 } }
+local function ProgressColor(frac)
+    frac = math.min(1, math.max(0, frac))
+    if frac >= 1 then
+        local c = PROGRESS_STOPS[4]
+        return string.format("|cff%02x%02x%02x", math.floor(c[1] * 255), math.floor(c[2] * 255), math.floor(c[3] * 255))
+    end
+    local t = frac * 3                       -- 0..3 over the first three segments
+    local i = math.min(3, math.floor(t) + 1)
+    local a, b, f = PROGRESS_STOPS[i], PROGRESS_STOPS[i + 1], t - (i - 1)
+    return string.format("|cff%02x%02x%02x", math.floor((a[1] + (b[1] - a[1]) * f) * 255),
+        math.floor((a[2] + (b[2] - a[2]) * f) * 255), math.floor((a[3] + (b[3] - a[3]) * f) * 255))
+end
 local ROW_H = 18
 local picked  -- session currently displayed
 
@@ -658,6 +684,7 @@ local function BuildUI()
     ui.xpBar.pend = ui.xpBar:CreateTexture(nil, "ARTWORK")
     ui.xpBar.pend:SetColorTexture(0.3, 0.85, 0.4, 0.95)
     ui.xpBar.pend:SetPoint("TOPLEFT", ui.xpBar.cur, "TOPRIGHT"); ui.xpBar.pend:SetPoint("BOTTOMLEFT", ui.xpBar.cur, "BOTTOMRIGHT")
+    ui.xpBar.div = {}
     ui.xpBar:SetScript("OnEnter", function(self)
         local xp, mx = UnitXP("player"), UnitXPMax("player")
         if not mx or mx <= 0 then return end
@@ -667,6 +694,11 @@ local function BuildUI()
         GameTooltip:AddDoubleLine("Completed quests", string.format("+%d (%.0f%%)", pendingXP, pendingXP / mx * 100), 0.4, 0.9, 0.5, 1, 1, 1)
         GameTooltip:AddDoubleLine("After turn-ins", string.format("%d / %d", xp + pendingXP, mx), 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("Remaining", tostring(math.max(0, mx - xp - pendingXP)), 0.7, 0.7, 0.7, 1, 1, 1)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("This session (quest related)", 1, 0.82, 0)
+        GameTooltip:AddDoubleLine("Quests completed", string.format("%d (%d turned in)", completeCount + login.turnedIn, login.turnedIn), 0.7, 0.7, 0.7, 1, 1, 1)
+        GameTooltip:AddDoubleLine("XP earned", tostring(login.xp), 0.7, 0.7, 0.7, 1, 1, 1)
+        GameTooltip:AddDoubleLine("Gold earned", CoinText(login.copper), 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:Show()
     end)
     ui.xpBar:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -869,8 +901,8 @@ Refresh = function()
         if o then
             local text = o.text or o.name
             local have, need = text:match("(%d+)/(%d+)")
-            local done = have and tonumber(have) >= tonumber(need)
-            fs:SetText((done and "|cff66ff66" or "|cffdddddd") .. text .. "|r")
+            local frac = have and tonumber(need) > 0 and tonumber(have) / tonumber(need)
+            fs:SetText((frac and ProgressColor(frac) or "|cffdddddd") .. text .. "|r")
             fs:ClearAllPoints(); fs:SetPoint("TOPLEFT", ui.card, "TOPLEFT", 14, -9 - (i - 1) * OBJ_H)
             fs:Show()
         else
@@ -902,6 +934,24 @@ Refresh = function()
         ui.xpBar.cur:SetWidth(math.max(0.001, curW))
         ui.xpBar.pend:SetWidth(math.max(0.001, pendW))
         ui.xpBar.pend:SetShown(pendW > 0.5)
+        -- thin dark divider after each completed quest's share (except the last)
+        local x, shown = curW, 0
+        for i = 1, #pendingList - 1 do
+            x = x + bw * pendingList[i] / mx
+            if x < curW + pendW - 1 then
+                shown = shown + 1
+                local d = ui.xpBar.div[shown]
+                if not d then
+                    d = ui.xpBar:CreateTexture(nil, "OVERLAY")
+                    d:SetColorTexture(0, 0, 0, 0.55)
+                    d:SetSize(1, 6)
+                    ui.xpBar.div[shown] = d
+                end
+                d:ClearAllPoints(); d:SetPoint("TOPLEFT", ui.xpBar, "TOPLEFT", x, 0)
+                d:Show()
+            end
+        end
+        for i = shown + 1, #ui.xpBar.div do ui.xpBar.div[i]:Hide() end
         ui.xpBar:ClearAllPoints(); ui.xpBar:SetPoint("TOPLEFT", ui, "TOPLEFT", PAD, y - 2)
         ui.xpBar:Show()
         height = height + 2 + 6
@@ -1122,11 +1172,14 @@ local function OnChatXP(msg)
         xpCounted[name] = GetTime()
         RecordKill(name, false)
     end
+    local related = false
     for _, s in ipairs(ActiveSessions()) do
+        if Related(s, name) then related = true end
         local m = Stat(s, name)
         m.xp = m.xp + amount
         s.totalXP = s.totalXP + amount
     end
+    if related then login.xp = login.xp + amount end
 end
 
 local function OnChatMoney(msg)
@@ -1142,13 +1195,23 @@ local function OnChatMoney(msg)
     if db.traceLoot then
         print_(string.format("money trace: %d copper, source=%s (lastLoot=%s)", total, tostring(src), tostring(lastLoot.name)))
     end
+    local related = false
     for _, s in ipairs(ActiveSessions()) do
         s.totalCopper = s.totalCopper + total
         if src then
+            if Related(s, src) then related = true end
             local m = Stat(s, src)
             m.copper = m.copper + total
         end
     end
+    if related then login.copper = login.copper + total end
+end
+
+-- turn-in rewards (QUEST_TURNED_IN passes questID, xpReward, moneyReward)
+local function OnQuestTurnedIn(questId, xpReward, moneyReward)
+    login.turnedIn = login.turnedIn + 1
+    login.xp = login.xp + (tonumber(xpReward) or QuestRewardXP(questId) or 0)
+    login.copper = login.copper + (tonumber(moneyReward) or QuestRewardMoney(questId) or 0)
 end
 
 frame:SetScript("OnEvent", function(_, event, ...)
@@ -1169,6 +1232,9 @@ frame:SetScript("OnEvent", function(_, event, ...)
         or event == "UNIT_QUEST_LOG_CHANGED" then
         local ok, err = pcall(ScanQuests)
         if not ok and not scanErrShown then scanErrShown = true; print_("Scan error: " .. tostring(err)) end
+    elseif event == "QUEST_TURNED_IN" then
+        pcall(OnQuestTurnedIn, ...)
+        pcall(ScanQuests)
     elseif event == "PLAYER_TARGET_CHANGED" then
         pcall(RememberUnit, "target")
         Refresh()
@@ -1194,7 +1260,7 @@ end)
 
 for _, e in ipairs({ "ADDON_LOADED", "PLAYER_LOGIN", "QUEST_LOG_UPDATE", "QUEST_ACCEPTED", "PLAYER_TARGET_CHANGED", "UPDATE_MOUSEOVER_UNIT",
     "UNIT_QUEST_LOG_CHANGED", "COMBAT_LOG_EVENT_UNFILTERED", "UNIT_HEALTH", "LOOT_OPENED", "LOOT_CLOSED",
-    "CHAT_MSG_LOOT", "CHAT_MSG_COMBAT_XP_GAIN", "CHAT_MSG_MONEY" }) do
+    "CHAT_MSG_LOOT", "CHAT_MSG_COMBAT_XP_GAIN", "CHAT_MSG_MONEY", "QUEST_TURNED_IN" }) do
     local ok, err = pcall(frame.RegisterEvent, frame, e)
     if not ok then print_("Could not register " .. e .. ": " .. tostring(err)) end
 end

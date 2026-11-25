@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.12
+
+- XP bar: thin dark dividers between each completed quest's share of the green section.
+- XP bar tooltip: session block with quests completed, quest-related XP earned and gold earned (since login; turn-in rewards via `QUEST_TURNED_IN`).
+- Objective lines are colored by progress, red through orange and yellow to green when complete.
+
 ## 0.4.11
 
 - Gold: money looted a second or more after the loot window closed is now credited to the last corpse opened (10s window); `/qmt trace` also prints money lines.
