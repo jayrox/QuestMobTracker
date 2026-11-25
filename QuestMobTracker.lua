@@ -1101,14 +1101,9 @@ end
 
 -- The combat log isn't available to addons on every client, so also watch the
 -- target's health: when it dies and the kill was yours, count it.
-local function TargetIsDead()
-    if UnitIsDead("target") then return true end
-    return UnitHealth and UnitHealthMax and (UnitHealthMax("target") or 0) > 0 and (UnitHealth("target") or 1) <= 0
-end
-
 local function OnTargetHealth(poll)
     if not poll then Dbg("health events") end
-    if not UnitExists("target") or UnitIsPlayer("target") or not TargetIsDead() then return end
+    if not UnitExists("target") or UnitIsPlayer("target") or not UnitIsDead("target") then return end
     Dbg("target dead")
     if UnitIsTapDenied and UnitIsTapDenied("target") then Dbg("tap denied"); return end
     local guid, name = UnitGUID("target"), UnitName("target")
@@ -1116,6 +1111,33 @@ local function OnTargetHealth(poll)
         guidNames[guid] = name
         CountKill(guid, name, poll and "target dead (1s check)" or "target death (UNIT_HEALTH)")
     end
+end
+
+-- Nameplate method (same idea as the CountMyKills addon): every visible creature nameplate is a unit token
+-- we can ask UnitIsDead / UnitIsTapDenied about, so mobs die-and-count even when they aren't targeted.
+local plates = {}   -- unit token ("nameplate3") -> { guid=, name=, counted= }
+
+local function PlateAdded(token)
+    if not (UnitExists(token) and not UnitIsPlayer(token)) then return end
+    local guid, name = UnitGUID(token), UnitName(token)
+    if not (guid and name and guid:find("^Creature")) then return end
+    guidNames[guid] = name
+    plates[token] = { guid = guid, name = name, counted = counted[guid] ~= nil }
+    Dbg("plates seen")
+end
+
+local function CheckPlate(token)
+    local e = plates[token]
+    if not e or e.counted then return end
+    if counted[e.guid] then e.counted = true; return end
+    if not UnitExists(token) or UnitGUID(token) ~= e.guid or not UnitIsDead(token) then return end
+    if UnitIsTapDenied and UnitIsTapDenied(token) then Dbg("plate tap denied"); e.counted = true; return end
+    e.counted = true
+    CountKill(e.guid, e.name, "nameplate")
+end
+
+local function CheckAllPlates()
+    for token in pairs(plates) do CheckPlate(token) end
 end
 
 local function OnLootOpened()
@@ -1232,19 +1254,19 @@ local function OnChatXP(msg)
     amount = tonumber(amount)
     if not (name and amount) then return end
     lastXPName, lastXPAt = name, GetTime()
-    do   -- remember which corpse this was, so looting it later isn't counted as another kill
-        local tg = UnitGUID("target")
-        if tg and UnitName("target") == name then
-            counted[tg] = GetTime(); guidNames[tg] = name
-        else   -- corpse unknown: let the next loot of this name claim this kill instead of counting again
-            local u = xpUnclaimed[name]
-            if not u or GetTime() - u.at > 120 then u = { count = 0 }; xpUnclaimed[name] = u end
-            u.count, u.at = u.count + 1, GetTime()
-        end
-    end
     lastSource = { name = name, at = GetTime() }
-    -- fallback kill count when the combat log didn't report this kill
+    -- kill count from the XP message, unless a death check already counted this kill a moment ago
     if not lastKillAt[name] or GetTime() - lastKillAt[name] > 3 then
+        do   -- remember which corpse this was, so looting it later isn't counted as another kill
+            local tg = UnitGUID("target")
+            if tg and UnitName("target") == name then
+                counted[tg] = GetTime(); guidNames[tg] = name
+            else   -- corpse unknown: the next loot of this name claims this kill instead of counting again
+                local u = xpUnclaimed[name]
+                if not u or GetTime() - u.at > 120 then u = { count = 0 }; xpUnclaimed[name] = u end
+                u.count, u.at = u.count + 1, GetTime()
+            end
+        end
         xpCounted[name] = GetTime()
         killVia["xp message"] = (killVia["xp message"] or 0) + 1
         if db.traceLoot then print_("kill trace: " .. name .. " counted via xp message (CHAT_MSG_COMBAT_XP_GAIN)") end
@@ -1313,7 +1335,15 @@ frame:SetScript("OnEvent", function(_, event, ...)
         local ok, err = pcall(OnCombatLog)
         if not ok then cleuSeen["ERR " .. tostring(err):sub(1, 80)] = 1 end
     elseif event == "UNIT_HEALTH" then
-        if (...) == "target" then pcall(OnTargetHealth) end
+        local unit = ...
+        if unit == "target" then pcall(OnTargetHealth)
+        elseif plates[unit] then pcall(CheckPlate, unit) end
+    elseif event == "NAME_PLATE_UNIT_ADDED" then
+        pcall(PlateAdded, (...))
+    elseif event == "NAME_PLATE_UNIT_REMOVED" then
+        local token = ...
+        pcall(CheckPlate, token)   -- last look: it may have died just as the plate went away
+        plates[token] = nil
     elseif event == "LOOT_OPENED" or event == "LOOT_READY" then
         OnLootOpened()   -- with auto-loot LOOT_READY comes first and the window may close before LOOT_OPENED
     elseif event == "LOOT_CLOSED" then
@@ -1352,6 +1382,8 @@ registering = "PLAYER_TARGET_CHANGED"; Registered("PLAYER_TARGET_CHANGED", pcall
 registering = "UPDATE_MOUSEOVER_UNIT"; Registered("UPDATE_MOUSEOVER_UNIT", pcall(frame.RegisterEvent, frame, "UPDATE_MOUSEOVER_UNIT"))
 registering = "UNIT_QUEST_LOG_CHANGED"; Registered("UNIT_QUEST_LOG_CHANGED", pcall(frame.RegisterEvent, frame, "UNIT_QUEST_LOG_CHANGED"))
 -- COMBAT_LOG_EVENT_UNFILTERED is not registered: this client blocks it for addons (nothing is ever delivered)
+registering = "NAME_PLATE_UNIT_ADDED"; Registered("NAME_PLATE_UNIT_ADDED", pcall(frame.RegisterEvent, frame, "NAME_PLATE_UNIT_ADDED"))
+registering = "NAME_PLATE_UNIT_REMOVED"; Registered("NAME_PLATE_UNIT_REMOVED", pcall(frame.RegisterEvent, frame, "NAME_PLATE_UNIT_REMOVED"))
 registering = "UNIT_HEALTH"; Registered("UNIT_HEALTH", pcall(frame.RegisterEvent, frame, "UNIT_HEALTH"))
 registering = "LOOT_READY"; Registered("LOOT_READY", pcall(frame.RegisterEvent, frame, "LOOT_READY"))
 registering = "LOOT_OPENED"; Registered("LOOT_OPENED", pcall(frame.RegisterEvent, frame, "LOOT_OPENED"))
@@ -1385,6 +1417,7 @@ frame:SetScript("OnUpdate", function(_, dt)
         -- UNIT_HEALTH is sparse on this client, so also look at the target once a second
         local tg = UnitExists("target") and UnitGUID("target")
         if tg and not counted[tg] then pcall(OnTargetHealth, true) end
+        pcall(CheckAllPlates)
         for _, s in ipairs(ActiveSessions()) do
             s.idle = s.idle or 0
             if not s.completeAt then   -- timers freeze once the objectives are done

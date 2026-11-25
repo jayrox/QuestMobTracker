@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.15
+
+- Nameplate kill detection: every visible creature nameplate is watched (`NAME_PLATE_UNIT_ADDED/REMOVED`, `UNIT_HEALTH` on the plate, plus the 1s check). A dead, not tap-denied creature counts as a kill even when it was never targeted.
+- XP-message kills only leave a loot-claim marker when they are the ones that counted the kill, so a kill already counted from its nameplate can't swallow a later loot kill.
+- Removed the `UnitHealth` read from the target-death check (hidden value on this client family; `UnitIsDead` is enough).
+
 ## 0.4.14
 
 - Kill detection: this client delivers no combat log events (registering `COMBAT_LOG_EVENT_UNFILTERED` raised ADDON_ACTION_FORBIDDEN), so it is no longer registered.
