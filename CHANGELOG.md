@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.19
+
+- The hand-in location (NPC, continent, zone, coordinates) sits in its own small grey block with a gap below the quest's objective text, and the objective text starts at the top of its card instead of hanging out of the bottom.
+- README: install, what it shows and a description of each command.
+
 ## 0.4.18
 
 - Quests whose objectives are object interactions (`0/1 Bloodsail Trunk examined`, "used", "activated") are now tracked too. Before, such a quest was ignored, so focusing it in the game's tracker left the window on the previous quest. Quests that are ready to turn in are tracked too, even when no countable objective is left (for example "Return to X"), so they can be focused and show their reward on the XP bar.

@@ -1017,8 +1017,8 @@ Refresh = function()
             if #s.objectives == 0 and s.otherText then
                 -- nothing to count: show what the quest asks for instead of "No kills yet"
                 local c = s.complete and "|cff66ff66" or "|cffdddddd"
-                ui.cardTitle:SetText(c .. s.otherText .. "|r" .. (s.destination and ("\n|cff9aa0ad" .. s.destination .. "|r") or ""))
-                ui.cardSub:SetText("")
+                ui.cardTitle:SetText(c .. s.otherText .. "|r")
+                ui.cardSub:SetText(s.destination or "")   -- hand-in location, a small gap below the objective
                 objectiveText = true
             else
                 ui.cardTitle:SetText(hasItem and "No drops yet" or "No kills yet")
@@ -1074,14 +1074,19 @@ Refresh = function()
         end
     end
     local objBlock = nObj > 0 and (nObj * OBJ_H + 6) or 0
-    ui.cardTitle:SetWidth(objectiveText and (W - PAD * 2 - 24) or 0)
+    local textW = W - PAD * 2 - 24
+    ui.cardTitle:SetWidth(objectiveText and textW or 0)
+    ui.cardSub:SetWidth(objectiveText and textW or 0)
     if objectiveText then
-        ui.cardTitle:SetWordWrap(true)
-        objBlock = math.max(-14, math.ceil(ui.cardTitle:GetStringHeight()) + 24 - 46)
+        ui.cardTitle:SetWordWrap(true); ui.cardSub:SetWordWrap(true)
+        local subH = s.destination and (math.ceil(ui.cardSub:GetStringHeight()) + 6) or 0
+        objBlock = math.max(-14, math.ceil(ui.cardTitle:GetStringHeight()) + subH + 24 - 46)
     end
     ui.card:SetHeight(46 + objBlock)
     ui.cardTitle:ClearAllPoints(); ui.cardTitle:SetPoint("TOPLEFT", 14, objectiveText and -9 or (-9 - objBlock))
-    ui.cardSub:ClearAllPoints();   ui.cardSub:SetPoint("TOPLEFT", 14, -26 - objBlock)
+    ui.cardSub:ClearAllPoints()
+    if objectiveText then ui.cardSub:SetPoint("TOPLEFT", ui.cardTitle, "BOTTOMLEFT", 0, -6)
+    else ui.cardSub:SetPoint("TOPLEFT", 14, -26 - objBlock) end
     local top = -158 - objBlock
     ui.headRow:ClearAllPoints(); ui.headRow:SetPoint("TOPLEFT", PAD, top)
     for i = 1, MAX_MOBS do
