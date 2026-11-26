@@ -718,6 +718,7 @@ local function BuildUI()
     ui.card = Panel(ui, W - PAD * 2, 46, 0.08)
     ui.card:SetPoint("TOPLEFT", PAD, -104)
     local bar = ui.card:CreateTexture(nil, "ARTWORK")
+    ui.cardBar = bar   -- gold; green once the quest is complete (set in Refresh)
     bar:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 1)
     bar:SetPoint("TOPLEFT"); bar:SetPoint("BOTTOMLEFT"); bar:SetWidth(3)
     ui.cardTitle = Text(ui.card, "GameFontHighlight"); ui.cardTitle:SetPoint("TOPLEFT", 14, -9)
@@ -959,6 +960,8 @@ Refresh = function()
     picked = s
 
     local rowsShown = 0
+    local barColor = (s and s.complete) and PROGRESS_STOPS[4] or ACCENT   -- green once the quest is complete
+    ui.cardBar:SetColorTexture(barColor[1], barColor[2], barColor[3], 1)
     local objectiveText = false   -- card shows the quest's objective text instead of kill/drop lines
     if not s then
         ui.title:SetText("Quest Mob Tracker")

@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.20
+
+- The accent bar on the left of the quest card turns green when the quest is complete (gold otherwise), using the same green as completed objectives.
+
 ## 0.4.19
 
 - The hand-in location (NPC, continent, zone, coordinates) sits in its own small grey block with a gap below the quest's objective text, and the objective text starts at the top of its card instead of hanging out of the bottom.
