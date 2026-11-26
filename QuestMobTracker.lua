@@ -189,6 +189,71 @@ local function QuestieMobs(questId)
     return result, result2
 end
 
+-- Optional (Questie): where the quest is handed in, as "Name" and a second line "Continent, Zone · x, y". Cached; a failed lookup
+-- (database not ready, or no spawn data) is retried after 30s.
+local destCache, destFailedAt = {}, {}
+local function QuestDestination(questId)
+    if not questId or not QuestieLoader or not QuestieLoader.ImportModule then return nil end
+    if destCache[questId] then return destCache[questId] end
+    if destFailedAt[questId] and GetTime() - destFailedAt[questId] < 30 then return nil end
+    local ok, text = pcall(function()
+        local DB = QuestieLoader:ImportModule("QuestieDB")
+        local fin = DB and DB.QueryQuestSingle and DB.QueryQuestSingle(questId, "finishedBy")
+        if type(fin) ~= "table" then return nil end
+        local npcId = type(fin[1]) == "table" and fin[1][1] or nil
+        local objId = type(fin[2]) == "table" and fin[2][1] or nil
+        local name, spawns
+        if npcId then
+            name, spawns = DB.QueryNPCSingle(npcId, "name"), DB.QueryNPCSingle(npcId, "spawns")
+        elseif objId then
+            name, spawns = DB.QueryObjectSingle(objId, "name"), DB.QueryObjectSingle(objId, "spawns")
+        end
+        if not name then return nil end
+        local parts = { name }
+        if type(spawns) == "table" then
+            local areaId
+            for id, pts in pairs(spawns) do   -- lowest area id with a real point, so the choice is stable
+                if type(pts) == "table" and pts[1] and (pts[1][1] or -1) > 0 and (not areaId or id < areaId) then areaId = id end
+            end
+            if areaId then
+                local pt = spawns[areaId][1]
+                local ZoneDB = QuestieLoader:ImportModule("ZoneDB")
+                local mapId = ZoneDB and ZoneDB.GetUiMapIdByAreaId and ZoneDB:GetUiMapIdByAreaId(areaId)
+                local info = mapId and C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(mapId)
+                if info and info.name then
+                    local continent
+                    local cur, guard = info, 0
+                    while cur and cur.parentMapID and cur.parentMapID ~= 0 and guard < 8 do
+                        cur = C_Map.GetMapInfo(cur.parentMapID); guard = guard + 1
+                        if cur and Enum and Enum.UIMapType and cur.mapType == Enum.UIMapType.Continent then continent = cur.name; break end
+                    end
+                    parts[#parts + 1] = (continent and (continent .. ", ") or "") .. info.name
+                end
+                parts[#parts + 1] = string.format("%.1f, %.1f", pt[1], pt[2])
+            end
+        end
+        return parts[1] .. (parts[2] and ("\n" .. table.concat(parts, "  ·  ", 2)) or "")
+    end)
+    if ok and text then destCache[questId] = text; return text end
+    destFailedAt[questId] = GetTime()
+end
+
+-- The quest's objective description ("Speak with X at Y"), for quests whose log shows no objective rows.
+-- Needs the quest selected in the log, so the selection is put back; cached per quest.
+local objTextCache = {}
+local function QuestObjectiveText(index, questId)
+    if objTextCache[questId] then return objTextCache[questId] end
+    if not GetQuestLogQuestText then return nil end
+    local ok, obj = pcall(function()
+        local oldSel = GetQuestLogSelection and GetQuestLogSelection()
+        if SelectQuestLogEntry then SelectQuestLogEntry(index) end
+        local _, o = GetQuestLogQuestText(index)
+        if oldSel and SelectQuestLogEntry then SelectQuestLogEntry(oldSel) end
+        return o
+    end)
+    if ok and type(obj) == "string" and obj ~= "" then objTextCache[questId] = obj; return obj end
+end
+
 -- Reads the quest log with whichever API this client has.
 -- Returns list of {title=, questId=, complete=, objs={ {type=,text=} }}
 local function ReadQuestLog()
@@ -202,6 +267,9 @@ local function ReadQuestLog()
                 q.complete = C_QuestLog.IsComplete and C_QuestLog.IsComplete(info.questID) or false
                 local objs = C_QuestLog.GetQuestObjectives and C_QuestLog.GetQuestObjectives(info.questID) or {}
                 for _, o in ipairs(objs) do q.objs[#q.objs + 1] = { type = o.type, text = o.text } end
+                local hasText = false
+                for _, o in ipairs(q.objs) do if o.text and o.text ~= "" then hasText = true end end
+                if not hasText then q.text = QuestObjectiveText(i, info.questID) end
                 out[#out + 1] = q
             end
         end
@@ -215,6 +283,9 @@ local function ReadQuestLog()
                     local text, otype = GetQuestLogLeaderBoard(j, i)
                     q.objs[#q.objs + 1] = { type = otype, text = text }
                 end
+                local hasText = false
+                for _, o in ipairs(q.objs) do if o.text and o.text ~= "" then hasText = true end end
+                if not hasText then q.text = QuestObjectiveText(i, questId) end
                 out[#out + 1] = q
             end
         end
@@ -347,12 +418,12 @@ local function ScanQuests()
         local title = q.title
         local objs = {}
         for _, o in ipairs(q.objs) do
-            if o.type == "monster" or o.type == "item" then
+            if o.type == "monster" or o.type == "item" or o.type == "object" or o.type == "event" then   -- "Chest examined", "Rune used" etc. too, so the quest can be focused
                 local name = ParseObjective(o.text, o.type)
                 if name then objs[#objs + 1] = { type = o.type, name = name, text = o.text } end
             end
         end
-        if #objs > 0 then
+        if #objs > 0 or q.complete then   -- a ready-to-turn-in quest can have no countable objective left ("Return to X")
             seen[title] = true
             local s = db.quests[title]
             if not s or not s.active then
@@ -366,6 +437,14 @@ local function ScanQuests()
             end
             s.objectives = objs
             s.questId = q.questId
+            -- objective text the counters can't use ("Speak with X"), shown in place of the kill/drop line
+            local other = {}
+            for _, o in ipairs(q.objs) do
+                if o.text and o.text ~= "" and not ParseObjective(o.text, o.type) then other[#other + 1] = o.text end
+            end
+            if #other == 0 and q.text then other[1] = q.text end
+            s.otherText = #other > 0 and table.concat(other, "\n") or nil
+            s.destination = (#objs == 0 and s.otherText) and QuestDestination(q.questId) or nil
             s.rewardXP = QuestRewardXP(q.questId) or s.rewardXP
             s.rewardMoney = QuestRewardMoney(q.questId) or s.rewardMoney
             s.isObject = s.isObject or {}
@@ -880,13 +959,14 @@ Refresh = function()
     picked = s
 
     local rowsShown = 0
+    local objectiveText = false   -- card shows the quest's objective text instead of kill/drop lines
     if not s then
         ui.title:SetText("Quest Mob Tracker")
         ui.timer:SetText("")
         ui.idle:SetText("")
         for _, t in ipairs(ui.tiles) do t.value:SetText("-"); t.sub:SetText("") end
         ui.cardTitle:SetText("No tracked quest")
-        ui.cardSub:SetText("Needs a quest with kill or item objectives")
+        ui.cardSub:SetText("Needs a quest with kill, item or object objectives")
         ui.foot:SetText("")
     else
         local names = QuestMobNames(s)
@@ -934,8 +1014,16 @@ Refresh = function()
             local ago = Ago(s.latestKill.at)
             ui.cardSub:SetText("Latest kill" .. (ago ~= "" and (" · " .. ago) or ""))
         else
-            ui.cardTitle:SetText(hasItem and "No drops yet" or "No kills yet")
-            ui.cardSub:SetText(#names > 0 and "Kill a listed mob below" or "Waiting for a matching mob")
+            if #s.objectives == 0 and s.otherText then
+                -- nothing to count: show what the quest asks for instead of "No kills yet"
+                local c = s.complete and "|cff66ff66" or "|cffdddddd"
+                ui.cardTitle:SetText(c .. s.otherText .. "|r" .. (s.destination and ("\n|cff9aa0ad" .. s.destination .. "|r") or ""))
+                ui.cardSub:SetText("")
+                objectiveText = true
+            else
+                ui.cardTitle:SetText(hasItem and "No drops yet" or "No kills yet")
+                ui.cardSub:SetText(#names > 0 and "Kill a listed mob below" or "Waiting for a matching mob")
+            end
         end
 
         if scrollTitle ~= s.title then scrollTitle, scrollOffset = s.title, 0 end
@@ -986,8 +1074,13 @@ Refresh = function()
         end
     end
     local objBlock = nObj > 0 and (nObj * OBJ_H + 6) or 0
+    ui.cardTitle:SetWidth(objectiveText and (W - PAD * 2 - 24) or 0)
+    if objectiveText then
+        ui.cardTitle:SetWordWrap(true)
+        objBlock = math.max(-14, math.ceil(ui.cardTitle:GetStringHeight()) + 24 - 46)
+    end
     ui.card:SetHeight(46 + objBlock)
-    ui.cardTitle:ClearAllPoints(); ui.cardTitle:SetPoint("TOPLEFT", 14, -9 - objBlock)
+    ui.cardTitle:ClearAllPoints(); ui.cardTitle:SetPoint("TOPLEFT", 14, objectiveText and -9 or (-9 - objBlock))
     ui.cardSub:ClearAllPoints();   ui.cardSub:SetPoint("TOPLEFT", 14, -26 - objBlock)
     local top = -158 - objBlock
     ui.headRow:ClearAllPoints(); ui.headRow:SetPoint("TOPLEFT", PAD, top)

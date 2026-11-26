@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.18
+
+- Quests whose objectives are object interactions (`0/1 Bloodsail Trunk examined`, "used", "activated") are now tracked too. Before, such a quest was ignored, so focusing it in the game's tracker left the window on the previous quest. Quests that are ready to turn in are tracked too, even when no countable objective is left (for example "Return to X"), so they can be focused and show their reward on the XP bar.
+- When a quest has nothing to count, the card shows the quest's own objective text (for example "Speak with Witch Doctor Uzer'i...") instead of "No kills yet" / "No drops yet". With Questie installed, a second line gives the hand-in NPC or object, continent, zone and coordinates.
+
 ## 0.4.17
 
 - Fixed `attempted to index a table that cannot be indexed with secret keys` (repeating once a second): this client can return "secret" GUIDs and names, which can't be used as table keys. Unit GUID/name lookups now skip secret values, and so does the loot-source GUID.
