@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.17
+
+- Fixed `attempted to index a table that cannot be indexed with secret keys` (repeating once a second): this client can return "secret" GUIDs and names, which can't be used as table keys. Unit GUID/name lookups now skip secret values, and so does the loot-source GUID.
+
 ## 0.4.16
 
 - Quests completed (session tooltip) now counts only definite turn-ins, so abandoned quests are not counted: the game's `<quest> completed.` message, the `QUEST_TURNED_IN` event, a quest leaving the log within 3s of a quest reward line (`Experience gained` / `Received <money>`), or Questie's `RegisterForQuestUpdates` API (backup, if Questie is installed).

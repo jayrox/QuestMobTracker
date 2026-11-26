@@ -20,6 +20,13 @@ local lastLoot = { token = 0 }
 local lastLootSrc   -- {name=, at=} last corpse/object whose loot window we opened (outlives lastLoot)
 local lootPatterns, xpPattern, moneyPatterns, slainSuffix, questDonePat, questExpPat, questMoneyPat
 local scanErrShown   -- only report a quest-scan error once
+-- This client can hand back "secret" values (e.g. a unit's GUID or name while it is restricted). A secret can't be
+-- used as a table key, compared or pattern-matched, so unit lookups return nil for one and callers just skip it.
+local rawGUID, rawName = UnitGUID, UnitName
+local function NotSecret(v) return v ~= nil and not (issecretvalue and issecretvalue(v)) end
+local function UGuid(unit) local v = rawGUID(unit); if NotSecret(v) then return v end end
+local function UName(unit) local v = rawName(unit); if NotSecret(v) then return v end end
+
 
 local function Version()
     local get = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
@@ -835,7 +842,7 @@ local function PickQuest(list)
         if focused and not otherActive then return focused end
     end
     -- targeting a mob that belongs to a quest in the log: focus that quest
-    local target = UnitExists("target") and not UnitIsPlayer("target") and UnitName("target")
+    local target = UnitExists("target") and not UnitIsPlayer("target") and UName("target")
     if target then
         local hits = {}
         for _, s in ipairs(list) do
@@ -1077,7 +1084,7 @@ end
 
 local function RememberUnit(unit)
     if UnitExists(unit) and not UnitIsPlayer(unit) then
-        local g, n = UnitGUID(unit), UnitName(unit)
+        local g, n = UGuid(unit), UName(unit)
         if g and n then guidNames[g] = n end
     end
 end
@@ -1124,7 +1131,7 @@ local function OnCombatLog()
     local _, sub, _, srcGUID, _, _, _, destGUID, destName = getter()
     cleuSeen[sub or "?"] = (cleuSeen[sub or "?"] or 0) + 1
     if not destGUID or not destName then return end
-    local mine = srcGUID == UnitGUID("player") or (UnitGUID("pet") and srcGUID == UnitGUID("pet"))
+    local mine = srcGUID == UGuid("player") or (UGuid("pet") and srcGUID == UGuid("pet"))
     if sub == "PARTY_KILL" then
         guidNames[destGUID] = destName
         if mine then CountKill(destGUID, destName, "combat log PARTY_KILL") end
@@ -1145,7 +1152,7 @@ local function OnTargetHealth(poll)
     if not UnitExists("target") or UnitIsPlayer("target") or not UnitIsDead("target") then return end
     Dbg("target dead")
     if UnitIsTapDenied and UnitIsTapDenied("target") then Dbg("tap denied"); return end
-    local guid, name = UnitGUID("target"), UnitName("target")
+    local guid, name = UGuid("target"), UName("target")
     if guid and name then
         guidNames[guid] = name
         CountKill(guid, name, poll and "target dead (1s check)" or "target death (UNIT_HEALTH)")
@@ -1158,7 +1165,7 @@ local plates = {}   -- unit token ("nameplate3") -> { guid=, name=, counted= }
 
 local function PlateAdded(token)
     if not (UnitExists(token) and not UnitIsPlayer(token)) then return end
-    local guid, name = UnitGUID(token), UnitName(token)
+    local guid, name = UGuid(token), UName(token)
     if not (guid and name and guid:find("^Creature")) then return end
     guidNames[guid] = name
     plates[token] = { guid = guid, name = name, counted = counted[guid] ~= nil }
@@ -1169,7 +1176,7 @@ local function CheckPlate(token)
     local e = plates[token]
     if not e or e.counted then return end
     if counted[e.guid] then e.counted = true; return end
-    if not UnitExists(token) or UnitGUID(token) ~= e.guid or not UnitIsDead(token) then return end
+    if not UnitExists(token) or UGuid(token) ~= e.guid or not UnitIsDead(token) then return end
     if UnitIsTapDenied and UnitIsTapDenied(token) then Dbg("plate tap denied"); e.counted = true; return end
     e.counted = true
     CountKill(e.guid, e.name, "nameplate")
@@ -1184,6 +1191,7 @@ local function OnLootOpened()
     if GetLootSourceInfo then
         for slot = 1, GetNumLootItems() do
             guid = GetLootSourceInfo(slot)
+            if not NotSecret(guid) then guid = nil end
             if guid then break end
         end
     end
@@ -1196,7 +1204,7 @@ local function OnLootOpened()
         local obj = WorldObjectName()
         if obj then name = obj; lastLoot.isObject = true end
     end
-    name = name or UnitName("target")
+    name = name or UName("target")
         or (lastXPName and lastXPAt and GetTime() - lastXPAt < 30 and lastXPName) or nil
     lastLoot.name = name
     -- Fallback kill: looting a creature corpse we never counted (no combat log here, and no XP message
@@ -1206,7 +1214,7 @@ local function OnLootOpened()
         claim.count = claim.count - 1
         counted[guid] = GetTime()   -- this corpse was already counted from its XP message
     elseif guid and guid:find("^Creature") and not counted[guid] then
-        local kname = guidNames[guid] or (UnitGUID("target") == guid and UnitName("target")) or nil
+        local kname = guidNames[guid] or (UGuid("target") == guid and UName("target")) or nil
         if kname then pcall(CountKill, guid, kname, "loot") else Dbg("loot: corpse name unknown") end
     elseif guid and counted[guid] then Dbg("loot: already counted")
     elseif guid then Dbg("loot: not a creature guid") end
@@ -1232,7 +1240,7 @@ local function OnChatLoot(msg)
                     tostring(itemName), tostring(lastLoot.name), tostring(lastLoot.guid),
                     tostring(lastSource and lastSource.name),
                     lastSource and string.format("%.0f", GetTime() - lastSource.at) or "-",
-                    tostring(lastXPName), tostring(UnitName("target"))))
+                    tostring(lastXPName), tostring(UName("target"))))
             end
             local src, isObj = lastLoot.name, lastLoot.isObject
             if not src then
@@ -1297,8 +1305,8 @@ local function OnChatXP(msg)
     -- kill count from the XP message, unless a death check already counted this kill a moment ago
     if not lastKillAt[name] or GetTime() - lastKillAt[name] > 3 then
         do   -- remember which corpse this was, so looting it later isn't counted as another kill
-            local tg = UnitGUID("target")
-            if tg and UnitName("target") == name then
+            local tg = UGuid("target")
+            if tg and UName("target") == name then
                 counted[tg] = GetTime(); guidNames[tg] = name
             else   -- corpse unknown: the next loot of this name claims this kill instead of counting again
                 local u = xpUnclaimed[name]
@@ -1530,7 +1538,7 @@ frame:SetScript("OnUpdate", function(_, dt)
         sincePrune = sincePrune + acc
         if sincePrune >= 120 then sincePrune = 0; PruneCaches(now) end
         -- UNIT_HEALTH is sparse on this client, so also look at the target once a second
-        local tg = UnitExists("target") and UnitGUID("target")
+        local tg = UnitExists("target") and UGuid("target")
         if tg and not counted[tg] then pcall(OnTargetHealth, true) end
         pcall(CheckAllPlates)
         for _, s in ipairs(ActiveSessions()) do
