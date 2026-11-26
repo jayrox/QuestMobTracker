@@ -6,10 +6,6 @@ A WoW Forever addon that tracks the quest you're working on: which mobs (or worl
 
 Copy this folder to `World of Warcraft\_forever_\Interface\AddOns\QuestMobTracker\`, or create a junction so the game always loads the repo:
 
-```powershell
-New-Item -ItemType Junction -Path "C:\Program Files (x86)\World of Warcraft\_forever_\Interface\AddOns\QuestMobTracker" -Target "C:\dev\QuestMobTracker"
-```
-
 Questie is optional. If installed, its database is used to list the mobs and objects for each quest.
 
 ## Commands
