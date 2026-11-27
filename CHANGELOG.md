@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.25
+
+- The addon's TOC file is now `QuestMobTracker.toc` (was `QuestMobTracker_Forever.toc`) so the CurseForge packager can find it.
+
 ## 0.4.24
 
 - Packaging for CurseForge: `.pkgmeta`, the CurseForge project ID in the `.toc`, and a GitHub workflow that packages and publishes when a version tag is pushed.
