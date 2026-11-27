@@ -1,0 +1,23 @@
+name: Package and release
+
+# Runs when a version tag (for example v0.4.24) is pushed.
+# Uploads to CurseForge when X-Curse-Project-ID is set in the .toc and the
+# CF_API_KEY repository secret exists; GitHub releases use the built-in token.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: BigWigsMods/packager@v2
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}

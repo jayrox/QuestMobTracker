@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.24
+
+- Packaging for CurseForge: `.pkgmeta`, the CurseForge project ID in the `.toc`, and a GitHub workflow that packages and publishes when a version tag is pushed.
+
 ## 0.4.23
 
 - World-object rows in the source list show an icon instead of the grey "(object)" text: the icon Questie uses for objects when Questie is installed, otherwise a small box.
