@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.23
+
+- World-object rows in the source list show an icon instead of the grey "(object)" text: the icon Questie uses for objects when Questie is installed, otherwise a small box.
+- The XP bar tooltip always shows a "Reputation gained" line ("none yet" until a gain is counted), and reputation lines are also read from the system chat channel.
+
 ## 0.4.22
 
 - The XP bar tooltip lists the reputation gained this session, per faction (for example `Orgrimmar +100`), read from the game's reputation chat messages.

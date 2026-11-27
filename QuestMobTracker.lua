@@ -525,6 +525,18 @@ end
 local ROW_H = 18
 local picked  -- session currently displayed
 
+-- Inline icon for world-object rows: Questie's own object icon when installed, else a plain box.
+local function ObjectIcon()
+    local path
+    if type(Questie) == "table" then
+        -- the icon Questie itself draws for objects (honours its icon options), else its stock object icon
+        local used = type(Questie.usedIcons) == "table" and Questie.ICON_TYPE_OBJECT and Questie.usedIcons[Questie.ICON_TYPE_OBJECT]
+        path = used or (type(Questie.icons) == "table" and Questie.icons["object"])
+    end
+    if type(path) ~= "string" then path = "Interface\\Icons\\INV_Box_01" end
+    return "|T" .. path .. ":12:12:0:0|t "
+end
+
 local function ShortMoney(c)
     c = math.floor(c or 0)
     local g, s, cc = math.floor(c / 10000), math.floor(c / 100) % 100, c % 100
@@ -870,7 +882,9 @@ local function BuildUI()
         GameTooltip:AddDoubleLine("Gold earned", CoinText(login.copper), 0.7, 0.7, 0.7, 1, 1, 1)
         local factions = {}
         for name in pairs(login.rep) do factions[#factions + 1] = name end
-        if #factions > 0 then
+        if #factions == 0 then
+            GameTooltip:AddDoubleLine("Reputation gained", "none yet", 0.7, 0.7, 0.7, 0.5, 0.52, 0.58)
+        else
             table.sort(factions, function(a, b)
                 if login.rep[a] ~= login.rep[b] then return login.rep[a] > login.rep[b] end
                 return a < b
@@ -1064,7 +1078,7 @@ Refresh = function()
             if name then
                 local m = s.mobs[name] or { kills = 0, drops = 0, items = 0, xp = 0, copper = 0 }
                 local isObj = (s.isObject and s.isObject[name]) or (s.knownObjs and s.knownObjs[name] and not (s.known and s.known[name]))
-                r.name:SetText(isObj and (name .. " |cff8f9bb3(object)|r") or name)
+                r.name:SetText(isObj and (ObjectIcon() .. name) or name)
                 r.cols.kills:SetText(isObj and "-" or m.kills)
                 r.cols.drops:SetText(hasItem and m.items or "-")
                 r.cols.xp:SetText(m.xp)
@@ -1469,6 +1483,7 @@ end
 local lastQuestMoney = { amount = 0, at = -10 }
 
 -- "Reputation with Orgrimmar increased by 100." (also the older "Your X reputation has increased by N.")
+local lastRepMsg, lastRepAt = nil, -10
 local function OnChatFaction(msg)
     if type(msg) ~= "string" or not NotSecret(msg) then return end
     local name, n = msg:match("[Rr]eputation with (.-) increased by (%d+)")
@@ -1478,6 +1493,10 @@ local function OnChatFaction(msg)
     if not name then name, n = msg:match("Your (.-) reputation has decreased by (%d+)"); sign = -1 end
     n = tonumber(n)
     if not (name and n) then return end
+    -- the same line can reach more than one chat event; count it once
+    local now = GetTime()
+    if lastRepMsg == msg and now - lastRepAt < 1 then return end
+    lastRepMsg, lastRepAt = msg, now
     login.rep[name] = (login.rep[name] or 0) + sign * n
     if db.traceLoot then print_("rep trace: " .. name .. " " .. (sign * n)) end
 end
@@ -1620,6 +1639,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "CHAT_MSG_COMBAT_FACTION_CHANGE" then
         pcall(OnChatFaction, (...))
     elseif event == "CHAT_MSG_SYSTEM" then
+        pcall(OnChatFaction, (...))   -- some clients deliver reputation lines here
         pcall(OnQuestMsg, (...))
     end
 end)
