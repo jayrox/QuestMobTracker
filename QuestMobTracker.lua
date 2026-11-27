@@ -346,7 +346,7 @@ local pendingList = {}  -- reward XP of each completed quest, for the bar divide
 local focusXP = 0   -- reward XP of the shown quest when it is not complete yet (purple bar segment)
 local completeCount = 0   -- quests in the log that are complete (not yet turned in)
 -- quest-related earnings since login (not saved): mob XP/gold of related mobs plus turn-in rewards
-local login = { xp = 0, copper = 0, turnedIn = 0 }
+local login = { xp = 0, copper = 0, turnedIn = 0, rep = {} }   -- rep: faction -> reputation gained this session
 local dbg = {}   -- debug counters for /qmt kills
 local function Dbg(k, v) dbg[k] = v == nil and ((dbg[k] or 0) + 1) or v end
 
@@ -868,6 +868,20 @@ local function BuildUI()
         GameTooltip:AddDoubleLine("Quests completed", string.format("%d (%d turned in)", completeCount + login.turnedIn, login.turnedIn), 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("XP earned", tostring(login.xp), 0.7, 0.7, 0.7, 1, 1, 1)
         GameTooltip:AddDoubleLine("Gold earned", CoinText(login.copper), 0.7, 0.7, 0.7, 1, 1, 1)
+        local factions = {}
+        for name in pairs(login.rep) do factions[#factions + 1] = name end
+        if #factions > 0 then
+            table.sort(factions, function(a, b)
+                if login.rep[a] ~= login.rep[b] then return login.rep[a] > login.rep[b] end
+                return a < b
+            end)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Reputation gained", 1, 0.82, 0)
+            for _, name in ipairs(factions) do
+                local v = login.rep[name]
+                GameTooltip:AddDoubleLine(name, (v >= 0 and "+" or "") .. v, 0.7, 0.7, 0.7, v >= 0 and 0.4 or 1, v >= 0 and 0.9 or 0.4, v >= 0 and 0.5 or 0.4)
+            end
+        end
         GameTooltip:Show()
     end)
     ui.xpBar:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1453,6 +1467,21 @@ end
 -- Quest turn-in messages. Returns true when the line was one of them. Quests that only finish at the
 -- hand-in aren't "complete" in the log beforehand, so the log can't tell us; the messages can.
 local lastQuestMoney = { amount = 0, at = -10 }
+
+-- "Reputation with Orgrimmar increased by 100." (also the older "Your X reputation has increased by N.")
+local function OnChatFaction(msg)
+    if type(msg) ~= "string" or not NotSecret(msg) then return end
+    local name, n = msg:match("[Rr]eputation with (.-) increased by (%d+)")
+    local sign = 1
+    if not name then name, n = msg:match("Your (.-) reputation has increased by (%d+)") end
+    if not name then name, n = msg:match("[Rr]eputation with (.-) decreased by (%d+)"); sign = -1 end
+    if not name then name, n = msg:match("Your (.-) reputation has decreased by (%d+)"); sign = -1 end
+    n = tonumber(n)
+    if not (name and n) then return end
+    login.rep[name] = (login.rep[name] or 0) + sign * n
+    if db.traceLoot then print_("rep trace: " .. name .. " " .. (sign * n)) end
+end
+
 local function OnQuestMsg(msg)
     if not (questDonePat and msg) then return false end
     local title = msg:match(questDonePat)
@@ -1588,6 +1617,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         OnChatXP((...))
     elseif event == "CHAT_MSG_MONEY" then
         OnChatMoney((...))
+    elseif event == "CHAT_MSG_COMBAT_FACTION_CHANGE" then
+        pcall(OnChatFaction, (...))
     elseif event == "CHAT_MSG_SYSTEM" then
         pcall(OnQuestMsg, (...))
     end
@@ -1628,6 +1659,7 @@ registering = "CHAT_MSG_LOOT"; Registered("CHAT_MSG_LOOT", pcall(frame.RegisterE
 registering = "CHAT_MSG_COMBAT_XP_GAIN"; Registered("CHAT_MSG_COMBAT_XP_GAIN", pcall(frame.RegisterEvent, frame, "CHAT_MSG_COMBAT_XP_GAIN"))
 registering = "QUEST_TURNED_IN"; Registered("QUEST_TURNED_IN", pcall(frame.RegisterEvent, frame, "QUEST_TURNED_IN"))
 registering = "CHAT_MSG_SYSTEM"; Registered("CHAT_MSG_SYSTEM", pcall(frame.RegisterEvent, frame, "CHAT_MSG_SYSTEM"))
+registering = "CHAT_MSG_COMBAT_FACTION_CHANGE"; Registered("CHAT_MSG_COMBAT_FACTION_CHANGE", pcall(frame.RegisterEvent, frame, "CHAT_MSG_COMBAT_FACTION_CHANGE"))
 registering = "CHAT_MSG_MONEY"; Registered("CHAT_MSG_MONEY", pcall(frame.RegisterEvent, frame, "CHAT_MSG_MONEY"))
 
 -- per-session lookup tables would otherwise grow with every mob ever seen

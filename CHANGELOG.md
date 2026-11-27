@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.22
+
+- The XP bar tooltip lists the reputation gained this session, per faction (for example `Orgrimmar +100`), read from the game's reputation chat messages.
+
 ## 0.4.21
 
 - Settings window: a gear button on the tracker, `/qmt config`, and an entry in the game's AddOns options open it. It has sliders for size and background opacity, a lock for the window position, a switch for the automatic chat messages, and a reset-sessions button.
