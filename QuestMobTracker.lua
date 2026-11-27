@@ -35,6 +35,7 @@ local function Version()
 end
 
 local function print_(msg) print("|cff33ccff[QMT]|r " .. tostring(msg)) end
+local function Notice(msg) if db and db.quiet then return end print_(msg) end   -- automatic messages; settings can silence them
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -418,7 +419,7 @@ local function ScanQuests()
         local title = q.title
         local objs = {}
         for _, o in ipairs(q.objs) do
-            if o.type == "monster" or o.type == "item" or o.type == "object" or o.type == "event" then   -- "Chest examined", "Rune used" etc. too, so the quest can be focused
+            if o.type == "monster" or o.type == "item" or o.type == "object" or o.type == "event" or o.type == "reputation" then   -- "Chest examined", "Rune used" etc. too, so the quest can be focused
                 local name = ParseObjective(o.text, o.type)
                 if name then objs[#objs + 1] = { type = o.type, name = name, text = o.text } end
             end
@@ -433,7 +434,7 @@ local function ScanQuests()
                 end
                 s = NewSession(title)
                 db.quests[title] = s
-                print_("Tracking '" .. title .. "'.")
+                Notice("Tracking '" .. title .. "'.")
             end
             s.objectives = objs
             s.questId = q.questId
@@ -466,7 +467,7 @@ local function ScanQuests()
             if not q.complete and s.completeAt then s.completeAt = nil end
             if q.complete and s.started and not s.completeAt then
                 s.completeAt = s.elapsed
-                print_("'" .. title .. "' objectives complete in " .. FormatTime(s.elapsed) .. ".")
+                Notice("'" .. title .. "' objectives complete in " .. FormatTime(s.elapsed) .. ".")
             end
         end
     end
@@ -475,7 +476,7 @@ local function ScanQuests()
         if s.active and not seen[title] then
             s.active = false
             QuestLeftLog(title)
-            print_("'" .. title .. "' left your log. Total time in log " .. FormatTime(s.elapsed + (s.idle or 0))
+            Notice("'" .. title .. "' left your log. Total time in log " .. FormatTime(s.elapsed + (s.idle or 0))
                 .. " (active " .. FormatTime(s.elapsed) .. ").")
         end
     end
@@ -599,6 +600,7 @@ local function Text(parent, font, justify)
 end
 
 local Refresh  -- forward declaration
+local OpenConfig, RegisterOptions  -- settings window and its AddOns-options entry, defined further down
 
 local function BuildUI()
     ui = CreateFrame("Frame", "QMTFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -608,7 +610,7 @@ local function BuildUI()
     ui:EnableMouse(true)
     ui:SetClampedToScreen(true)
     ui:RegisterForDrag("LeftButton")
-    ui:SetScript("OnDragStart", ui.StartMoving)
+    ui:SetScript("OnDragStart", function(self) if not db.locked then self:StartMoving() end end)
     ui:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         local p, _, rp, x, y = self:GetPoint()
@@ -634,13 +636,24 @@ local function BuildUI()
     ui.title:SetWidth(W - 150)
     ui.title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
     ui.timer = Text(ui, "GameFontHighlight", "RIGHT")
-    ui.timer:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -40, -11)
+    ui.timer:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -56, -11)
     ui.idle = Text(ui, "GameFontNormalSmall", "RIGHT")
-    ui.idle:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -40, -26)
+    ui.idle:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -56, -26)
     ui.idle:SetTextColor(0.5, 0.52, 0.58)
     ui.close = CreateFrame("Button", nil, ui, "UIPanelCloseButton")
     ui.close:SetPoint("TOPRIGHT", 2, 0)
     ui.close:HookScript("OnClick", function() db.hidden = true end)
+    ui.gear = CreateFrame("Button", nil, ui)
+    ui.gear:SetSize(16, 16)
+    ui.gear:SetPoint("TOPRIGHT", ui, "TOPRIGHT", -34, -9)
+    ui.gear:SetNormalTexture("Interface\\Buttons\\UI-OptionsButton")
+    ui.gear:SetHighlightTexture("Interface\\Buttons\\UI-OptionsButton")
+    ui.gear:GetHighlightTexture():SetAlpha(0.5)
+    ui.gear:SetScript("OnClick", function() OpenConfig() end)
+    ui.gear:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine("Settings"); GameTooltip:Show()
+    end)
+    ui.gear:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- stat tiles
     local labels = { "Kills", "Drops", "XP", "Gold" }
@@ -1536,6 +1549,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         db.focusSoft, db.focusAt = nil, nil
         BuildPatterns()
         BuildUI()
+        pcall(RegisterOptions)
     elseif not db then
         return
     elseif event == "QUEST_TURNED_IN" then
@@ -1655,6 +1669,100 @@ frame:SetScript("OnUpdate", function(_, dt)
 end)
 
 ---------------------------------------------------------------------------
+-- Settings window (gear button, /qmt config, and an entry in the game's AddOns options)
+---------------------------------------------------------------------------
+local config
+OpenConfig = function()
+    if config then config:SetShown(not config:IsShown()); return end
+    config = CreateFrame("Frame", "QMTConfig", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    config:SetSize(300, 262)
+    config:SetPoint("CENTER")
+    config:SetFrameStrata("DIALOG")
+    config:SetMovable(true); config:EnableMouse(true); config:SetClampedToScreen(true)
+    config:RegisterForDrag("LeftButton")
+    config:SetScript("OnDragStart", config.StartMoving)
+    config:SetScript("OnDragStop", config.StopMovingOrSizing)
+    config:SetBackdrop({ bgFile = WHITE, edgeFile = WHITE, edgeSize = 1 })
+    config:SetBackdropColor(0.06, 0.07, 0.09, 0.96)
+    config:SetBackdropBorderColor(0, 0, 0, 1)
+    table.insert(UISpecialFrames, "QMTConfig")   -- Escape closes it
+
+    local line = config:CreateTexture(nil, "ARTWORK")
+    line:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 1)
+    line:SetPoint("TOPLEFT"); line:SetPoint("TOPRIGHT"); line:SetHeight(2)
+    local title = Text(config, "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -14); title:SetText("Quest Mob Tracker")
+    title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+    local x = CreateFrame("Button", nil, config, "UIPanelCloseButton")
+    x:SetPoint("TOPRIGHT", 2, 0)
+
+    local function Slider(name, label, y, lo, hi, step, get, set)
+        local sl = CreateFrame("Slider", "QMTConfig" .. name, config, "OptionsSliderTemplate")
+        sl:SetPoint("TOPLEFT", 20, y); sl:SetWidth(260)
+        sl:SetMinMaxValues(lo, hi); sl:SetValueStep(step)
+        if sl.SetObeyStepOnDrag then sl:SetObeyStepOnDrag(true) end
+        local function Part(k) local v = sl[k] or _G[sl:GetName() .. k]; return type(v) == "table" and v or nil end
+        local text, low, high = Part("Text"), Part("Low"), Part("High")
+        if low then low:SetText(lo) end
+        if high then high:SetText(hi) end
+        sl:SetValue(get())
+        if text then text:SetText(string.format("%s: %.2f", label, get())) end
+        sl:SetScript("OnValueChanged", function(_, v)
+            v = math.floor(v / step + 0.5) * step
+            set(v)
+            if text then text:SetText(string.format("%s: %.2f", label, v)) end
+        end)
+    end
+    Slider("Scale", "Size", -58, 0.4, 2, 0.05, function() return db.scale or 0.85 end,
+        function(v) db.scale = v; ui:SetScale(v) end)
+    Slider("Alpha", "Background", -104, 0, 1, 0.05, function() return db.alpha or 0.6 end,
+        function(v)
+            db.alpha = v
+            ui:SetBackdropColor(0.06, 0.07, 0.09, v)
+            ui:SetBackdropBorderColor(0, 0, 0, math.min(1, v + 0.2))
+        end)
+
+    local function Check(name, label, y, get, set)
+        local cb = CreateFrame("CheckButton", "QMTConfig" .. name, config, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", 14, y); cb:SetSize(26, 26)
+        local text = cb.Text or _G[cb:GetName() .. "Text"]
+        if type(text) ~= "table" then text = nil end
+        if text then text:SetText(label); text:SetFontObject("GameFontHighlight") end
+        cb:SetChecked(get())
+        cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false) end)
+    end
+    Check("Lock", "Lock window position", -140, function() return db.locked end, function(v) db.locked = v end)
+    Check("Chat", "Show chat messages", -168, function() return not db.quiet end, function(v) db.quiet = not v end)
+
+    local reset = CreateFrame("Button", nil, config, "UIPanelButtonTemplate")
+    reset:SetSize(150, 24); reset:SetPoint("BOTTOMLEFT", 18, 16)
+    reset:SetText("Reset all sessions")
+    reset:SetScript("OnClick", function()
+        db.quests = {}
+        ScanQuests()
+        Refresh()
+        print_("All sessions reset.")
+    end)
+    local hint = Text(config, "GameFontNormalSmall")
+    hint:SetPoint("BOTTOMLEFT", 18, 48); hint:SetTextColor(0.5, 0.52, 0.58)
+    hint:SetText("Drag the window to move it.")
+end
+
+RegisterOptions = function()
+    local panel = CreateFrame("Frame")
+    panel.name = "Quest Mob Tracker"
+    local btn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    btn:SetSize(170, 24); btn:SetPoint("TOPLEFT", 16, -16)
+    btn:SetText("Open settings")
+    btn:SetScript("OnClick", function() OpenConfig() end)
+    if Settings and Settings.RegisterCanvasLayoutCategory then
+        Settings.RegisterAddOnCategory(Settings.RegisterCanvasLayoutCategory(panel, panel.name))
+    elseif InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(panel)
+    end
+end
+
+---------------------------------------------------------------------------
 -- Slash commands
 ---------------------------------------------------------------------------
 SLASH_QMT1 = "/qmt"
@@ -1664,6 +1772,9 @@ SlashCmdList["QMT"] = function(input)
         db.quests = {}
         ScanQuests()
         print_("All sessions reset.")
+    elseif cmd == "config" or cmd == "settings" or cmd == "options" then
+        local ok, err = pcall(OpenConfig)
+        if not ok then print_("Could not open settings: " .. tostring(err)) end
     elseif cmd == "show" then
         db.hidden = false; ui:Show()
     elseif cmd == "hide" then
@@ -1716,7 +1827,7 @@ SlashCmdList["QMT"] = function(input)
             print_(string.format("%s: %s, %d kills, %d xp, %s", s.title, FormatTime(s.elapsed), k, x, Money(c)))
         end
     else
-        print_("/qmt show | hide | focus [quest] | scale <n> | alpha <n> | reset | history | kills | debug | trace")
+        print_("/qmt show | hide | config | focus [quest] | scale <n> | alpha <n> | reset | history | kills | debug | trace")
     end
     Refresh()
 end

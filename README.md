@@ -23,6 +23,7 @@ The window follows the quest focused in the game's tracker. Use `/qmt focus` to 
 ## Commands
 
 - `/qmt show` and `/qmt hide` show or hide the window.
+- `/qmt config` opens the settings window: size, background opacity, locking the window, and the chat messages. The gear button on the window does the same.
 - `/qmt focus <quest>` locks the window to a quest by name. `/qmt focus` on its own goes back to following the game's tracker.
 - `/qmt scale <n>` makes the window bigger or smaller, from 0.4 to 2, for example `/qmt scale 1.2`.
 - `/qmt alpha <n>` sets how see-through the window is, from 0 to 1.
