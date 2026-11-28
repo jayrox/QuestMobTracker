@@ -2,6 +2,11 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.29
+
+- README updated for timed quests, escort quests, reputation and the sample linking, with new screenshots.
+- Release changelogs on GitHub and CurseForge now show only the latest three versions; this file keeps the full history.
+
 ## 0.4.28
 
 - The time remaining on a timed quest stays visible after its objectives are complete, until the quest is handed in.

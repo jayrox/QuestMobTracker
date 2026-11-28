@@ -2,3 +2,4 @@
 *.zip
 .vscode/
 .idea/
+RELEASE_CHANGELOG.md

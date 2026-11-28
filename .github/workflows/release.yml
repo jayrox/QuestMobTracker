@@ -17,6 +17,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # CHANGELOG.md keeps the full history; the release page and CurseForge get only the latest few versions.
+      - name: Trim changelog for the release
+        run: awk '/^## /{n++} n>=1 && n<=3' CHANGELOG.md > RELEASE_CHANGELOG.md
       - uses: BigWigsMods/packager@v2
         env:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
