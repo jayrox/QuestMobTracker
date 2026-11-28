@@ -24,8 +24,8 @@ local scanErrShown   -- only report a quest-scan error once
 -- used as a table key, compared or pattern-matched, so unit lookups return nil for one and callers just skip it.
 local rawGUID, rawName = UnitGUID, UnitName
 local function NotSecret(v) return v ~= nil and not (issecretvalue and issecretvalue(v)) end
-local function UGuid(unit) local v = rawGUID(unit); if NotSecret(v) then return v end end
-local function UName(unit) local v = rawName(unit); if NotSecret(v) then return v end end
+local function UGuid(unit) local v = rawGUID(unit); if NotSecret(v) then return v end return nil end
+local function UName(unit) local v = rawName(unit); if NotSecret(v) then return v end return nil end
 
 
 local function Version()
@@ -118,6 +118,13 @@ local function Adopt(s, name)
     p[name] = nil
     local m = Mob(s, name)
     for _, k in ipairs({ "kills", "xp", "copper", "drops", "items" }) do m[k] = m[k] + held[k] end
+end
+
+-- Key shared by an item and the quest item made from it: "Untested Basilisk Sample" and "Acceptable Basilisk Sample"
+-- both give "basilisk sample". Needs at least two words after the first, so single-word names never match.
+local function ItemFamily(name)
+    local rest = type(name) == "string" and name:match("^%S+%s+(.+)$")
+    if rest and rest:find("%s") then return rest:lower() end
 end
 
 -- remembers every item a source dropped (for the row tooltip)
@@ -398,6 +405,47 @@ local function QuestRewardSeen()
     TryPair()
 end
 
+-- Timed quests ("Time Remaining: 01:52:30"): seconds left, or nil when the quest has no time limit.
+local questTimers = {}   -- title -> { left = seconds at read time, at = GetTime(), checked = GetTime() }
+local function ReadTimeLeft(questId, title)
+    if C_QuestLog and C_QuestLog.GetTimeAllowed and questId then
+        local total, elapsed = C_QuestLog.GetTimeAllowed(questId)
+        if type(total) == "number" and type(elapsed) == "number" and total > 0 then return math.max(0, total - elapsed) end
+        return nil
+    end
+    -- older API: only the selected quest can be asked, and only when some quest is timed at all
+    if GetQuestTimers and GetQuestLogTimeLeft and GetNumQuestLogEntries and GetQuestLogTitle and SelectQuestLogEntry then
+        if select("#", GetQuestTimers()) == 0 then return nil end
+        local old = GetQuestLogSelection and GetQuestLogSelection()
+        local left
+        for i = 1, GetNumQuestLogEntries() do
+            local t, _, _, isHeader, _, _, _, id = GetQuestLogTitle(i)
+            if t and not isHeader and ((questId and id == questId) or t == title) then
+                SelectQuestLogEntry(i)
+                left = GetQuestLogTimeLeft()
+                break
+            end
+        end
+        if old then SelectQuestLogEntry(old) end
+        return type(left) == "number" and left or nil
+    end
+end
+
+local function UpdateQuestTimer(questId, title)
+    local now = GetTime()
+    local t = questTimers[title]
+    if t and now - t.checked < 5 then return end
+    local ok, left = pcall(ReadTimeLeft, questId, title)
+    questTimers[title] = { left = ok and left or nil, at = now, checked = now }
+end
+
+-- seconds left on a timed quest, counting down between reads
+local function TimeLeft(title)
+    local t = questTimers[title]
+    if not (t and t.left) then return nil end
+    return math.max(0, t.left - (GetTime() - t.at))
+end
+
 local function ScanQuests()
     local seen = {}
     local pend = 0
@@ -447,6 +495,7 @@ local function ScanQuests()
             s.questId = q.questId
             s.otherText = #other > 0 and table.concat(other, "\n") or nil
             s.destination = (#objs == 0 and s.otherText) and QuestDestination(q.questId) or nil
+            UpdateQuestTimer(q.questId, title)
             s.rewardXP = QuestRewardXP(q.questId) or s.rewardXP
             s.rewardMoney = QuestRewardMoney(q.questId) or s.rewardMoney
             s.isObject = s.isObject or {}
@@ -750,6 +799,8 @@ local function BuildUI()
     ui.cardTitle = Text(ui.card, "GameFontHighlight"); ui.cardTitle:SetPoint("TOPLEFT", 14, -9)
     ui.cardSub = Text(ui.card, "GameFontNormalSmall"); ui.cardSub:SetPoint("TOPLEFT", 14, -26)
     ui.cardSub:SetTextColor(0.62, 0.64, 0.7)
+    ui.cardTimer = Text(ui.card, "GameFontNormalSmall"); ui.cardTimer:SetPoint("TOPLEFT", 14, -9)
+    ui.cardTimer:Hide()
 
     -- objective list (inside the card, above the latest line; positioned in Refresh)
     ui.objFS = {}
@@ -1118,17 +1169,28 @@ Refresh = function()
             fs:Hide()
         end
     end
-    local objBlock = nObj > 0 and (nObj * OBJ_H + 6) or 0
+    -- time limit ("Time remaining: 1:52:30") as the last line of the objective block; amber, red in the last five minutes
+    local left = s and not s.complete and TimeLeft(s.title)
+    local timerH = left and OBJ_H or 0
+    if left then
+        local c = left < 300 and "|cffff5555" or "|cffffc83d"
+        ui.cardTimer:SetText(c .. "Time remaining: " .. FormatTime(left) .. "|r")
+        ui.cardTimer:ClearAllPoints(); ui.cardTimer:SetPoint("TOPLEFT", ui.card, "TOPLEFT", 14, -9 - nObj * OBJ_H)
+        ui.cardTimer:Show()
+    else
+        ui.cardTimer:Hide()
+    end
+    local objBlock = (nObj > 0 and (nObj * OBJ_H + 6) or 0) + timerH
     local textW = W - PAD * 2 - 24
     ui.cardTitle:SetWidth(objectiveText and textW or 0)
     ui.cardSub:SetWidth(objectiveText and textW or 0)
     if objectiveText then
         ui.cardTitle:SetWordWrap(true); ui.cardSub:SetWordWrap(true)
         local subH = s.destination and (math.ceil(ui.cardSub:GetStringHeight()) + 6) or 0
-        objBlock = math.max(-14, math.ceil(ui.cardTitle:GetStringHeight()) + subH + 24 - 46)
+        objBlock = math.max(-14, math.ceil(ui.cardTitle:GetStringHeight()) + subH + 24 - 46) + timerH
     end
     ui.card:SetHeight(46 + objBlock)
-    ui.cardTitle:ClearAllPoints(); ui.cardTitle:SetPoint("TOPLEFT", 14, objectiveText and -9 or (-9 - objBlock))
+    ui.cardTitle:ClearAllPoints(); ui.cardTitle:SetPoint("TOPLEFT", 14, objectiveText and (-9 - timerH) or (-9 - objBlock))
     ui.cardSub:ClearAllPoints()
     if objectiveText then ui.cardSub:SetPoint("TOPLEFT", ui.cardTitle, "BOTTOMLEFT", 0, -6)
     else ui.cardSub:SetPoint("TOPLEFT", 14, -26 - objBlock) end
@@ -1383,7 +1445,7 @@ local function OnChatLoot(msg)
                     tostring(itemName), tostring(lastLoot.name), tostring(lastLoot.guid),
                     tostring(lastSource and lastSource.name),
                     lastSource and string.format("%.0f", GetTime() - lastSource.at) or "-",
-                    tostring(lastXPName), tostring(UName("target"))))
+                    tostring(lastXPName), tostring((UName("target")))))
             end
             local src, isObj = lastLoot.name, lastLoot.isObject
             if not src then
@@ -1396,11 +1458,45 @@ local function OnChatLoot(msg)
                 end
             end
             src = src or (lastSource and GetTime() - lastSource.at < 90 and lastSource.name) or "Unknown source"
+            local family = ItemFamily(itemName)
             for _, s in ipairs(ActiveSessions()) do
                 local matched = false
+                -- A precursor of an objective item ("Untested X Sample" for "Acceptable X Sample"): the mob that dropped
+                -- it belongs to the quest, even though the objective item itself is made by using it.
+                if family and not lastLoot.isObject then
+                    for _, o in ipairs(s.objectives) do
+                        if o.type == "item" and o.name ~= itemName and ItemFamily(o.name) == family then
+                            s.members[src] = true
+                            Adopt(s, src)
+                            s.feeder = s.feeder or {}
+                            s.feeder[family] = src
+                            s.lastActive = GetTime()
+                            s.started = true
+                            s.latest = { item = itemName, count = count, mob = src, at = time() }
+                            local m = Mob(s, src)
+                            m.items = m.items + count
+                            if lastLoot.guid then
+                                if not s.dropGUIDs[lastLoot.guid] then
+                                    s.dropGUIDs[lastLoot.guid] = true
+                                    m.drops = m.drops + 1
+                                end
+                            else
+                                m.drops = m.drops + 1
+                            end
+                            AddLoot(m, itemName, link, count)
+                            matched = true
+                            break
+                        end
+                    end
+                end
                 for _, o in ipairs(s.objectives) do
-                    if o.type == "item" and o.name == itemName then
+                    if not matched and o.type == "item" and o.name == itemName then
                         local src, isObj = src, isObj
+                        -- made by using a precursor (no corpse was looted): credit the mob that dropped the precursor
+                        local converted = false
+                        if family and not lastLoot.guid and s.feeder and s.feeder[family] then
+                            src, isObj, converted = s.feeder[family], false, true
+                        end
                         -- Questie says this item only comes from world objects: use that
                         if not isObj and s.knownObjs and not s.known then
                             local only, n = nil, 0
@@ -1415,14 +1511,16 @@ local function OnChatLoot(msg)
                         s.started = true
                         s.latest = { item = itemName, count = count, mob = src, at = time() }
                         local m = Mob(s, src)
-                        m.items = m.items + count
-                        if lastLoot.guid then
-                            if not s.dropGUIDs[lastLoot.guid] then
-                                s.dropGUIDs[lastLoot.guid] = true
+                        if not converted then   -- a converted item was already counted when its precursor dropped
+                            m.items = m.items + count
+                            if lastLoot.guid then
+                                if not s.dropGUIDs[lastLoot.guid] then
+                                    s.dropGUIDs[lastLoot.guid] = true
+                                    m.drops = m.drops + 1
+                                end
+                            else
                                 m.drops = m.drops + 1
                             end
-                        else
-                            m.drops = m.drops + 1
                         end
                         AddLoot(m, itemName, link, count)
                         matched = true

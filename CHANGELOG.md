@@ -2,6 +2,12 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.27
+
+- Timed quests show `Time remaining: h:mm:ss` as the last line of the objective block (amber, red in the last five minutes).
+- Items that are made by using another item ("Untested Basilisk Sample" becoming "Acceptable Basilisk Sample") are linked by name: the mobs that drop the first item count as sources for the quest, and the made item is credited to the mob that dropped its precursor instead of the last mob killed.
+- Fixed an error in the `/qmt trace` loot line when nothing was targeted, which stopped that loot from being credited.
+
 ## 0.4.26
 
 - Quests with no counter (escort and "speak with" quests, for example `Lead Tooga to Torta`) are tracked too, so focusing one in the game's tracker switches the window to it. The card shows the quest's objective text.
