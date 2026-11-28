@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.28
+
+- The time remaining on a timed quest stays visible after its objectives are complete, until the quest is handed in.
+
 ## 0.4.27
 
 - Timed quests show `Time remaining: h:mm:ss` as the last line of the objective block (amber, red in the last five minutes).

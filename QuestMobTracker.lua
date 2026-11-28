@@ -1170,7 +1170,7 @@ Refresh = function()
         end
     end
     -- time limit ("Time remaining: 1:52:30") as the last line of the objective block; amber, red in the last five minutes
-    local left = s and not s.complete and TimeLeft(s.title)
+    local left = s and TimeLeft(s.title)   -- stays up after the objectives are done: the quest is timed until it's handed in
     local timerH = left and OBJ_H or 0
     if left then
         local c = left < 300 and "|cffff5555" or "|cffffc83d"
