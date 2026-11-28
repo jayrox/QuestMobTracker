@@ -424,7 +424,14 @@ local function ScanQuests()
                 if name then objs[#objs + 1] = { type = o.type, name = name, text = o.text } end
             end
         end
-        if #objs > 0 or q.complete then   -- a ready-to-turn-in quest can have no countable objective left ("Return to X")
+        -- objective text the counters can't use ("Speak with X", "Lead Tooga to Torta"), shown in place of the kill/drop line
+        local other = {}
+        for _, o in ipairs(q.objs) do
+            if o.text and o.text ~= "" and not ParseObjective(o.text, o.type) then other[#other + 1] = o.text end
+        end
+        if #other == 0 and q.text then other[1] = q.text end
+        -- a ready-to-turn-in quest can have no countable objective left ("Return to X"); escort and talk quests have no counter at all
+        if #objs > 0 or q.complete or #other > 0 then
             seen[title] = true
             local s = db.quests[title]
             if not s or not s.active then
@@ -438,12 +445,6 @@ local function ScanQuests()
             end
             s.objectives = objs
             s.questId = q.questId
-            -- objective text the counters can't use ("Speak with X"), shown in place of the kill/drop line
-            local other = {}
-            for _, o in ipairs(q.objs) do
-                if o.text and o.text ~= "" and not ParseObjective(o.text, o.type) then other[#other + 1] = o.text end
-            end
-            if #other == 0 and q.text then other[1] = q.text end
             s.otherText = #other > 0 and table.concat(other, "\n") or nil
             s.destination = (#objs == 0 and s.otherText) and QuestDestination(q.questId) or nil
             s.rewardXP = QuestRewardXP(q.questId) or s.rewardXP

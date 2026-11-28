@@ -2,6 +2,10 @@
 
 Versions follow [Semantic Versioning](https://semver.org): MAJOR.MINOR.PATCH.
 
+## 0.4.26
+
+- Quests with no counter (escort and "speak with" quests, for example `Lead Tooga to Torta`) are tracked too, so focusing one in the game's tracker switches the window to it. The card shows the quest's objective text.
+
 ## 0.4.25
 
 - The addon's TOC file is now `QuestMobTracker.toc` (was `QuestMobTracker_Forever.toc`) so the CurseForge packager can find it.
